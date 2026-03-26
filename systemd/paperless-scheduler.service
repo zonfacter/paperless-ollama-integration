@@ -1,0 +1,15 @@
+[Unit]
+Description=Paperless Celery Beat
+After=network.target postgresql.service redis.service
+Requires=redis.service
+
+[Service]
+User=paperless
+Group=paperless
+WorkingDirectory=/opt/paperless/src
+EnvironmentFile=/opt/paperless/paperless.conf
+Restart=always
+ExecStart=/bin/sh -c '. /opt/paperless/venv/bin/activate; exec celery --app paperless beat --loglevel INFO'
+
+[Install]
+WantedBy=multi-user.target

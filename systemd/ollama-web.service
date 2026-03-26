@@ -1,0 +1,17 @@
+[Unit]
+Description=Minimal Ollama Web UI
+After=network.target ollama.service
+Requires=ollama.service
+
+[Service]
+User=thomas
+Group=thomas
+WorkingDirectory=/home/thomas/ollama-web
+Environment=OLLAMA_WEB_HOST=0.0.0.0
+Environment=OLLAMA_WEB_PORT=3000
+Environment=OLLAMA_BASE_URL=http://127.0.0.1:11434
+ExecStart=/usr/bin/python3 /home/thomas/ollama-web/server.py
+Restart=always
+
+[Install]
+WantedBy=multi-user.target
