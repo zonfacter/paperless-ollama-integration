@@ -1,9 +1,10 @@
 #!/usr/bin/env python3
 import json
 import os
+import subprocess
 import urllib.error
 import urllib.request
-from http import HTTPStatus
+from pathlib import Path
 from http.server import BaseHTTPRequestHandler
 from http.server import ThreadingHTTPServer
 
@@ -11,6 +12,8 @@ from http.server import ThreadingHTTPServer
 HOST = os.getenv("OLLAMA_WEB_HOST", "0.0.0.0")
 PORT = int(os.getenv("OLLAMA_WEB_PORT", "3000"))
 OLLAMA_URL = os.getenv("OLLAMA_BASE_URL", "http://127.0.0.1:11434")
+PAPERLESS_CONF = os.getenv("PAPERLESS_CONF", "/opt/paperless/paperless.conf")
+PAPERLESS_BACKFILL = os.getenv("PAPERLESS_BACKFILL", "/opt/paperless/ai_backfill.py")
 
 
 HTML = """<!doctype html>
@@ -159,6 +162,74 @@ HTML = """<!doctype html>
       color: var(--accent);
       border: 1px solid rgba(30,92,73,0.18);
     }
+    .section {
+      padding: 20px 24px;
+      border-top: 1px solid var(--line);
+      background: rgba(255,255,255,0.42);
+    }
+    .section h2 {
+      margin: 0 0 6px;
+      font-size: 24px;
+    }
+    .section p {
+      margin: 0 0 14px;
+      color: var(--muted);
+      line-height: 1.5;
+    }
+    .grid {
+      display: grid;
+      grid-template-columns: repeat(3, minmax(0, 1fr));
+      gap: 12px;
+      margin-bottom: 12px;
+    }
+    .field {
+      display: grid;
+      gap: 6px;
+    }
+    .field label {
+      font-size: 13px;
+      color: var(--muted);
+    }
+    .check {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      color: var(--muted);
+      font-size: 14px;
+    }
+    .actions {
+      display: flex;
+      gap: 12px;
+      flex-wrap: wrap;
+    }
+    .secondary {
+      background: linear-gradient(135deg, #8f7f68, #736552);
+    }
+    .logbox {
+      margin-top: 14px;
+      min-height: 120px;
+      max-height: 320px;
+      overflow: auto;
+      border: 1px solid var(--line);
+      border-radius: 14px;
+      background: rgba(255,255,255,0.92);
+      padding: 12px 14px;
+      white-space: pre-wrap;
+      line-height: 1.45;
+    }
+    .statusline {
+      margin-top: 10px;
+      font-size: 14px;
+      color: var(--muted);
+    }
+    .warn {
+      color: #9d5a10;
+    }
+    @media (max-width: 760px) {
+      .grid {
+        grid-template-columns: 1fr;
+      }
+    }
     @keyframes rise {
       from { transform: translateY(6px); opacity: 0; }
       to { transform: translateY(0); opacity: 1; }
@@ -189,6 +260,37 @@ HTML = """<!doctype html>
         </div>
         <button id="send">Senden</button>
       </div>
+      <div class="section">
+        <h2>Paperless KI-Nachlauf</h2>
+        <p>
+          Bereits vorhandene Paperless-Dokumente koennen hier einmalig durch die KI
+          nachbearbeitet werden.
+        </p>
+        <div class="grid">
+          <div class="field">
+            <label for="backfill-limit">Limit</label>
+            <input id="backfill-limit" type="number" min="1" value="10">
+          </div>
+          <div class="field">
+            <label for="backfill-query">Query</label>
+            <input id="backfill-query" type="text" placeholder="optional">
+          </div>
+          <div class="field">
+            <label for="backfill-from-id">Ab Dokument-ID</label>
+            <input id="backfill-from-id" type="number" min="1" placeholder="optional">
+          </div>
+        </div>
+        <label class="check">
+          <input id="backfill-missing" type="checkbox" checked>
+          Nur Dokumente mit fehlenden Metadaten
+        </label>
+        <div class="actions">
+          <button id="backfill-preview" class="secondary">Vorschau</button>
+          <button id="backfill-run">Backfill starten</button>
+        </div>
+        <div id="backfill-status" class="statusline">Noch kein Lauf gestartet.</div>
+        <div id="backfill-log" class="logbox">Bereit.</div>
+      </div>
     </div>
   </div>
   <script>
@@ -198,6 +300,14 @@ HTML = """<!doctype html>
     const statusEl = document.getElementById('status');
     const sendBtn = document.getElementById('send');
     const clearBtn = document.getElementById('clear');
+    const backfillLimitEl = document.getElementById('backfill-limit');
+    const backfillQueryEl = document.getElementById('backfill-query');
+    const backfillFromIdEl = document.getElementById('backfill-from-id');
+    const backfillMissingEl = document.getElementById('backfill-missing');
+    const backfillPreviewBtn = document.getElementById('backfill-preview');
+    const backfillRunBtn = document.getElementById('backfill-run');
+    const backfillStatusEl = document.getElementById('backfill-status');
+    const backfillLogEl = document.getElementById('backfill-log');
     let messages = [];
 
     function addMessage(role, content) {
@@ -259,6 +369,56 @@ HTML = """<!doctype html>
       }
     }
 
+    function getBackfillPayload(dryRun) {
+      return {
+        dry_run: dryRun,
+        limit: Number(backfillLimitEl.value || 0),
+        query: backfillQueryEl.value.trim(),
+        from_id: Number(backfillFromIdEl.value || 0),
+        only_missing_metadata: backfillMissingEl.checked
+      };
+    }
+
+    async function runBackfill(dryRun) {
+      if (!dryRun) {
+        const limit = Number(backfillLimitEl.value || 0);
+        const query = backfillQueryEl.value.trim();
+        const warning = [
+          'Der echte Backfill startet jetzt die KI-Nachbearbeitung fuer vorhandene Paperless-Dokumente.',
+          limit > 0 ? `Limit: ${limit}` : 'Limit: unbegrenzt',
+          query ? `Query: ${query}` : 'Query: keine',
+          backfillMissingEl.checked ? 'Nur fehlende Metadaten: ja' : 'Nur fehlende Metadaten: nein'
+        ].join('\\n');
+        if (!window.confirm(warning + '\\n\\nFortfahren?')) {
+          backfillStatusEl.textContent = 'Start abgebrochen.';
+          return;
+        }
+      }
+      backfillPreviewBtn.disabled = true;
+      backfillRunBtn.disabled = true;
+      backfillStatusEl.textContent = dryRun ? 'Vorschau laeuft...' : 'Backfill laeuft...';
+      backfillStatusEl.className = 'statusline';
+      backfillLogEl.textContent = dryRun ? 'Vorschau laeuft...' : 'Backfill laeuft...';
+      try {
+        const res = await fetch('/api/paperless/backfill', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(getBackfillPayload(dryRun))
+        });
+        const data = await res.json();
+        if (!res.ok) throw new Error(data.error || 'Fehler');
+        backfillLogEl.textContent = data.output || 'Keine Ausgabe';
+        backfillStatusEl.textContent = dryRun ? 'Vorschau abgeschlossen.' : 'Backfill abgeschlossen.';
+      } catch (err) {
+        backfillLogEl.textContent = `Fehler: ${err.message}`;
+        backfillStatusEl.textContent = 'Fehler beim Backfill.';
+        backfillStatusEl.className = 'statusline warn';
+      } finally {
+        backfillPreviewBtn.disabled = false;
+        backfillRunBtn.disabled = false;
+      }
+    }
+
     sendBtn.addEventListener('click', sendPrompt);
     promptEl.addEventListener('keydown', (e) => {
       if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) sendPrompt();
@@ -268,6 +428,8 @@ HTML = """<!doctype html>
       render();
       statusEl.textContent = 'Verlauf geloescht.';
     });
+    backfillPreviewBtn.addEventListener('click', () => runBackfill(true));
+    backfillRunBtn.addEventListener('click', () => runBackfill(false));
 
     loadModels().catch(() => {
       statusEl.textContent = 'Modelle konnten nicht geladen werden.';
@@ -296,6 +458,70 @@ def ollama_request(path: str, payload: dict | None = None) -> tuple[int, dict]:
         return 500, {"error": str(exc)}
 
 
+def load_paperless_env() -> dict[str, str]:
+    env_map: dict[str, str] = {}
+    path = Path(PAPERLESS_CONF)
+    if not path.is_file():
+        raise RuntimeError(f"Paperless config not found: {path}")
+    for line in path.read_text(encoding="utf-8").splitlines():
+        stripped = line.strip()
+        if not stripped or stripped.startswith("#") or "=" not in stripped:
+            continue
+        key, value = stripped.split("=", 1)
+        env_map[key.strip()] = value.strip()
+    return env_map
+
+
+def run_paperless_backfill(payload: dict) -> tuple[int, dict]:
+    if not Path(PAPERLESS_BACKFILL).is_file():
+        return 500, {"error": f"Backfill script not found: {PAPERLESS_BACKFILL}"}
+
+    paperless_env = load_paperless_env()
+    child_env = os.environ.copy()
+    for key in (
+        "PAPERLESS_API_URL",
+        "PAPERLESS_API_TOKEN",
+        "PAPERLESS_AI_PROVIDER",
+        "PAPERLESS_AI_OLLAMA_URL",
+        "PAPERLESS_AI_OLLAMA_MODEL",
+        "PAPERLESS_AI_PROMPT_FILE",
+        "PAPERLESS_AI_CONTENT_CHARS",
+        "PAPERLESS_AI_MIN_CONFIDENCE",
+        "PAPERLESS_AI_DEFAULT_TAG_COLOR",
+        "OPENAI_API_KEY",
+        "PAPERLESS_AI_OPENAI_MODEL",
+    ):
+        if key in paperless_env:
+            child_env[key] = paperless_env[key]
+
+    cmd = ["/usr/bin/python3", PAPERLESS_BACKFILL]
+    limit = int(payload.get("limit") or 0)
+    from_id = int(payload.get("from_id") or 0)
+    query = str(payload.get("query") or "").strip()
+    if payload.get("only_missing_metadata"):
+        cmd.append("--only-missing-metadata")
+    if limit > 0:
+        cmd.extend(["--limit", str(limit)])
+    if from_id > 0:
+        cmd.extend(["--from-id", str(from_id)])
+    if query:
+        cmd.extend(["--query", query])
+    if payload.get("dry_run"):
+        cmd.append("--dry-run")
+
+    result = subprocess.run(
+        cmd,
+        env=child_env,
+        capture_output=True,
+        text=True,
+        check=False,
+        timeout=3600,
+    )
+    output = (result.stdout or "") + (result.stderr or "")
+    status = 200 if result.returncode == 0 else 500
+    return status, {"output": output.strip(), "returncode": result.returncode}
+
+
 class Handler(BaseHTTPRequestHandler):
     def _send(self, status: int, body: bytes, content_type: str) -> None:
         self.send_response(status)
@@ -315,7 +541,7 @@ class Handler(BaseHTTPRequestHandler):
         self._send(404, b"Not found", "text/plain; charset=utf-8")
 
     def do_POST(self) -> None:
-        if self.path != "/api/chat":
+        if self.path not in ("/api/chat", "/api/paperless/backfill"):
             self._send(404, b"Not found", "text/plain; charset=utf-8")
             return
         length = int(self.headers.get("Content-Length", "0"))
@@ -325,8 +551,14 @@ class Handler(BaseHTTPRequestHandler):
         except Exception:
             self._send(400, b'{"error":"invalid json"}', "application/json")
             return
-        payload["stream"] = False
-        status, response = ollama_request("/api/chat", payload)
+        if self.path == "/api/chat":
+            payload["stream"] = False
+            status, response = ollama_request("/api/chat", payload)
+        else:
+            try:
+                status, response = run_paperless_backfill(payload)
+            except Exception as exc:
+                status, response = 500, {"error": str(exc)}
         self._send(status, json.dumps(response).encode("utf-8"), "application/json")
 
     def log_message(self, format: str, *args) -> None:
