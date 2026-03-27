@@ -98,6 +98,7 @@ Der aktuelle Stand dieses Projekts bildet eine funktionierende Installation mit 
 ## Dokumentation
 
 - [ROADMAP](ROADMAP.md)
+- [CONFIG_EXAMPLES](docs/CONFIG_EXAMPLES.md)
 - [INSTALL](docs/INSTALL.md)
 - [OPERATIONS](docs/OPERATIONS.md)
 - [ARCHITECTURE](docs/ARCHITECTURE.md)
