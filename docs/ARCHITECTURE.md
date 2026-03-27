@@ -2,11 +2,109 @@
 
 ## Ueberblick
 
-Das System besteht aus drei Hauptteilen:
+Das System besteht in diesem Setup aus zwei Infrastrukturebenen und mehreren lokalen Diensten:
 
-1. `paperless-ngx`
-2. `Ollama`
-3. einer lokalen Glue-Logik fuer Metadatenanreicherung
+1. NAS / Hypervisor
+2. VM mit `paperless-ngx`, `Ollama` und der lokalen Glue-Logik
+
+## Reale Topologie
+
+```text
++--------------------------------------------------------------+
+| NAS / Hypervisor                                             |
+|                                                              |
+|  - hostet die VM                                             |
+|  - optional: Docker / Open WebUI ausserhalb der VM           |
++------------------------------+-------------------------------+
+                               |
+                               | virtueller Server
+                               v
++--------------------------------------------------------------+
+| VM: Paperless + Ollama                                       |
+|                                                              |
+|  Paperless-ngx                                               |
+|  - webserver.service      -> UI + API auf :8000             |
+|  - consumer.service       -> importiert neue Dokumente      |
+|  - task-queue.service     -> Celery-Tasks                   |
+|  - scheduler.service      -> periodische Tasks              |
+|                                                              |
+|  KI-Schicht                                                  |
+|  - /opt/paperless/ai_enrich.py                              |
+|  - /opt/paperless/ai_enrich_prompt.txt                      |
+|  - /opt/paperless/ai_backfill.py                            |
+|                                                              |
+|  Ollama                                                      |
+|  - API lokal auf 127.0.0.1:11434                            |
+|  - Modelle z. B. qwen3.5:9b / qwen3.5:4b                    |
+|                                                              |
+|  Webkonsole                                                  |
+|  - ollama-web.service -> Port 3000                          |
+|  - Chat, Review, Prompt, Modellsteuerung, Backfill          |
++--------------------------------------------------------------+
+```
+
+## Mermaid-Uebersicht
+
+```mermaid
+flowchart LR
+    browser[Browser im Heimnetz]
+    nas[NAS / Hypervisor]
+    subgraph vm[VM: Paperless + Ollama]
+        consume[Consume / Upload]
+        paperless[paperless-ngx\\nUI + API :8000]
+        consumer[consumer + task queue]
+        hook[ai_enrich.py]
+        prompt[ai_enrich_prompt.txt]
+        ollama[Ollama\\n127.0.0.1:11434]
+        webui[Paperless AI Console\\n:3000]
+    end
+
+    nas --> vm
+    browser --> webui
+    browser --> paperless
+    consume --> consumer
+    consumer --> paperless
+    consumer --> hook
+    prompt --> hook
+    paperless --> hook
+    hook --> ollama
+    hook --> paperless
+    webui --> paperless
+    webui --> ollama
+```
+
+## Was laeuft wo
+
+### NAS / Hypervisor
+
+- hostet die VM
+- stellt CPU, RAM und Storage bereit
+- kann optional weitere Container oder Dienste ausserhalb der VM betreiben
+
+### VM
+
+- fuehrt `paperless-ngx` aus
+- fuehrt `Ollama` lokal aus
+- fuehrt die Port-`3000`-Steuerkonsole aus
+- enthaelt Prompt, Hook und Backfill-Skripte
+
+## Netzsicht
+
+```text
+Browser
+  -> http://<vm-ip>:3000   Paperless AI Console
+  -> http://<vm-ip>:8000   Paperless UI / API
+
+Innerhalb der VM
+  -> http://127.0.0.1:11434   Ollama API
+  -> http://127.0.0.1:8000    Paperless API
+```
+
+Wichtig:
+
+- `Ollama` bleibt lokal gebunden
+- Browser greifen nicht direkt auf `11434` zu
+- die Webkonsole auf `3000` ist die kontrollierte Benutzeroberflaeche fuer Modelltests und Paperless-Review
 
 ## Komponenten
 
@@ -66,26 +164,52 @@ Das System besteht aus drei Hauptteilen:
 - `scripts/paperless-set-ollama-model`
   - schaltet das aktive Paperless-Modell um
 
-## Datenfluss
+## Datenfluss fuer neue Dokumente
 
 ```text
-Dokument -> Paperless Consume -> OCR/Text -> Document gespeichert
-        -> POST_CONSUME_SCRIPT -> ai_enrich.py
-        -> Prompt + OCR + Metadaten
-        -> Ollama
-        -> JSON-Antwort
-        -> Paperless API PATCH
+Dokument Upload / Consume
+    -> paperless-consumer.service
+    -> OCR/Text in Paperless gespeichert
+    -> PAPERLESS_POST_CONSUME_SCRIPT
+    -> ai_enrich.py
+    -> Prompt + OCR + bestehende Metadaten
+    -> Ollama
+    -> JSON-Antwort
+    -> PATCH an Paperless API
+    -> Dokument ist direkt angereichert
 ```
 
-## Review-Datenfluss
+## Datenfluss fuer Review im Browser
 
 ```text
-Browser :3000 -> web/server.py
-        -> Paperless API lesen
-        -> Hook-Logik als Preview
-        -> Vorschlag anzeigen
-        -> optional API PATCH nach Bestaetigung
+Browser -> :3000
+       -> web/server.py
+       -> Paperless API lesen
+       -> Hook-Logik als Preview
+       -> Vorschlag anzeigen
+       -> optional API PATCH nach Bestaetigung
 ```
+
+## Datenfluss fuer Backfill
+
+```text
+Browser -> :3000 -> Backfill starten
+       -> ai_backfill.py
+       -> Dokumente aus Paperless iterieren
+       -> pro Dokument Hook-Logik anwenden
+       -> Ergebnisse in Paperless zurueckschreiben
+```
+
+## Warum diese Trennung sinnvoll ist
+
+- `paperless-ngx` bleibt das fuehrende System fuer Dokumente und Metadaten
+- `Ollama` bleibt lokal und muss nicht direkt ins Netz
+- die Webkonsole auf `3000` ist die Arbeitsoberflaeche fuer:
+  - Modellwahl
+  - Prompt-Aenderung
+  - Einzel-Review
+  - Backfill
+- Hook und Backfill nutzen dieselbe fachliche Logik, damit automatische und manuelle Laeufe konsistent bleiben
 
 ## Sicherheitsmodell
 
