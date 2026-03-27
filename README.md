@@ -4,6 +4,31 @@ Deutsch. For English, see [README.en.md](README.en.md).
 
 Lokale Integration von `paperless-ngx` mit `Ollama` fuer KI-gestuetzte Nachbearbeitung von Dokumenten.
 
+## Kurzuebersicht
+
+### Native VM / Server
+
+- erkennt `/opt/paperless/paperless.conf`
+- installiert Hook, Prompt und Backfill nach `/opt/paperless`
+- aktualisiert `paperless.conf`
+- kann optional die Port-`3000`-Webkonsole installieren
+
+### Docker / Compose
+
+- erkennt typische Compose-Dateien
+- erstellt `paperless-ai.env`
+- erstellt `docker-compose.override.yml`
+- bindet Hook, Prompt und Backfill per Volume Mount ein
+
+### Was du bereithalten solltest
+
+- Paperless API URL
+- Paperless API Token
+- Ollama URL
+- Primaermodell
+- optionales Fallback-Modell
+- bei Docker: Compose-Datei und Service-Name
+
 Der aktuelle Stand dieses Projekts bildet eine funktionierende Installation mit folgenden Bausteinen ab:
 
 - `paperless-ngx` als native Systemd-Installation
@@ -58,8 +83,6 @@ Der aktuelle Stand dieses Projekts bildet eine funktionierende Installation mit 
 4. Der Hook liest das Dokument per API.
 5. `Ollama` erzeugt eine strukturierte JSON-Antwort.
 6. Der Hook schreibt Titel, Korrespondenz, Dokumenttyp und Tags zurueck.
-
-## Aktueller Workflow
 
 ## Schnellstart
 
