@@ -43,6 +43,8 @@ The current state of this project reflects a working setup with the following bu
   - privileged helper for prompt updates, configuration changes, and worker restarts
 - `scripts/paperless-set-ollama-model`
   - helper script to switch the active Paperless model
+- `scripts/install-paperless-ai.sh`
+  - guided installer for native and Docker-based Paperless setups
 - `scripts/configure-paperless-ai-ollama.sh`
   - configuration helper for `paperless.conf`
 - `docs/`
@@ -56,6 +58,23 @@ The current state of this project reflects a working setup with the following bu
 4. The hook reads the document through the API.
 5. `Ollama` generates a structured JSON response.
 6. The hook writes title, correspondent, document type, and tags back to Paperless.
+
+## Current Workflow
+
+## Quick Start
+
+Recommended entry point:
+
+```bash
+sudo bash scripts/install-paperless-ai.sh
+```
+
+The installer:
+
+- detects common native and Docker-based setups
+- tells you early which credentials and paths are required
+- asks for the needed values interactively
+- writes the right files for the chosen mode
 
 ## Current Workflow
 

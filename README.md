@@ -43,6 +43,8 @@ Der aktuelle Stand dieses Projekts bildet eine funktionierende Installation mit 
   - Root-Helfer fuer Prompt, Konfiguration und Worker-Neustarts
 - `scripts/paperless-set-ollama-model`
   - Hilfsskript zum Umschalten des aktiven Paperless-Modells
+- `scripts/install-paperless-ai.sh`
+  - gefuehrter Installer fuer native und Docker-basierte Paperless-Setups
 - `scripts/configure-paperless-ai-ollama.sh`
   - Konfigurationshilfe fuer `paperless.conf`
 - `docs/`
@@ -57,6 +59,23 @@ Der aktuelle Stand dieses Projekts bildet eine funktionierende Installation mit 
 5. `Ollama` erzeugt eine strukturierte JSON-Antwort.
 6. Der Hook schreibt Titel, Korrespondenz, Dokumenttyp und Tags zurueck.
 
+## Aktueller Workflow
+
+## Schnellstart
+
+Empfohlener Einstieg:
+
+```bash
+sudo bash scripts/install-paperless-ai.sh
+```
+
+Der Installer:
+
+- erkennt typische native und Docker-Setups
+- sagt frueh, welche Zugangsdaten und Pfade benoetigt werden
+- fragt die noetigen Werte interaktiv ab
+- schreibt die passenden Dateien fuer den gewaehlten Modus
+ 
 ## Aktueller Workflow
 
 ### Neue Dokumente
