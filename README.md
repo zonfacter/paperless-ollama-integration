@@ -1,5 +1,7 @@
 # Paperless Ollama Integration
 
+Deutsch. For English, see [README.en.md](README.en.md).
+
 Lokale Integration von `paperless-ngx` mit `Ollama` fuer KI-gestuetzte Nachbearbeitung von Dokumenten.
 
 Der aktuelle Stand dieses Projekts bildet eine funktionierende Installation mit folgenden Bausteinen ab:
