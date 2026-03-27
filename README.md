@@ -97,12 +97,14 @@ Der aktuelle Stand dieses Projekts bildet eine funktionierende Installation mit 
 
 ## Dokumentation
 
+- [ROADMAP](ROADMAP.md)
 - [INSTALL](docs/INSTALL.md)
 - [OPERATIONS](docs/OPERATIONS.md)
 - [ARCHITECTURE](docs/ARCHITECTURE.md)
 - [PROMPTS](docs/PROMPTS.md)
 - [SECURITY](docs/SECURITY.md)
 - [WEB_UI](docs/WEB_UI.md)
+- [UI_NOTES](docs/UI_NOTES.md)
 - [TROUBLESHOOTING](docs/TROUBLESHOOTING.md)
 
 ## Hinweise
