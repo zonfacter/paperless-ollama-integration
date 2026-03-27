@@ -71,7 +71,7 @@ Pruefen:
 
 ```bash
 ls -l /usr/local/sbin/paperless-ai-admin /usr/local/sbin/paperless-set-ollama-model
-ls -l /etc/sudoers.d/thomas-paperless-ai-admin /etc/sudoers.d/thomas-paperless-model
+ls -l /etc/sudoers.d/paperless-ai-admin /etc/sudoers.d/paperless-model
 ```
 
 ## `paperless-scheduler.service` fehlerhaft

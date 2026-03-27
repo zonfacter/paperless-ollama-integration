@@ -1,1 +1,0 @@
-thomas ALL=(root) NOPASSWD: /usr/local/sbin/paperless-set-ollama-model *

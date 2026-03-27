@@ -70,16 +70,17 @@ Diese Dateien gehoeren auf dem Zielsystem typischerweise nach:
 ```bash
 sudo install -m 755 scripts/paperless-ai-admin /usr/local/sbin/paperless-ai-admin
 sudo install -m 755 scripts/paperless-set-ollama-model /usr/local/sbin/paperless-set-ollama-model
-sudo install -m 440 systemd/thomas-paperless-ai-admin.sudoers /etc/sudoers.d/thomas-paperless-ai-admin
-sudo install -m 440 systemd/thomas-paperless-model.sudoers /etc/sudoers.d/thomas-paperless-model
+sudo cp systemd/paperless-ai-admin.sudoers.example /etc/sudoers.d/paperless-ai-admin
+sudo cp systemd/paperless-model.sudoers.example /etc/sudoers.d/paperless-model
+# replace PAPERLESS_UI_USER with your actual service user
 ```
 
 ## Ollama-Weboberflaeche
 
 ```bash
-sudo mkdir -p /home/thomas/ollama-web
-sudo cp web/server.py /home/thomas/ollama-web/server.py
-sudo chown -R thomas:thomas /home/thomas/ollama-web
+sudo mkdir -p /home/PAPERLESS_UI_USER/ollama-web
+sudo cp web/server.py /home/PAPERLESS_UI_USER/ollama-web/server.py
+sudo chown -R PAPERLESS_UI_USER:PAPERLESS_UI_USER /home/PAPERLESS_UI_USER/ollama-web
 sudo cp systemd/ollama-web.service /etc/systemd/system/ollama-web.service
 sudo systemctl daemon-reload
 sudo systemctl enable --now ollama-web.service
