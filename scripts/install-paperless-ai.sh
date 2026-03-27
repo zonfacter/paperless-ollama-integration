@@ -12,6 +12,29 @@ DEFAULT_CONFIDENCE="0.35"
 DEFAULT_TAG_COLOR="#4f6bed"
 DEFAULT_PAPERLESS_API_URL="http://127.0.0.1:8000"
 DEFAULT_OLLAMA_URL="http://127.0.0.1:11434"
+DRY_RUN="false"
+
+for arg in "$@"; do
+  case "${arg}" in
+    --dry-run)
+      DRY_RUN="true"
+      ;;
+    -h|--help)
+      cat <<'EOF'
+Usage: install-paperless-ai.sh [--dry-run]
+
+Options:
+  --dry-run   Collect inputs and print what would be changed without writing files.
+  -h, --help  Show this help.
+EOF
+      exit 0
+      ;;
+    *)
+      echo "Unknown option: ${arg}" >&2
+      exit 1
+      ;;
+  esac
+done
 
 if [[ "${EUID}" -ne 0 ]]; then
   echo "Run as root."
@@ -25,6 +48,16 @@ say() {
 fail() {
   printf 'Error: %s\n' "$*" >&2
   exit 1
+}
+
+run_or_echo() {
+  if [[ "${DRY_RUN}" == "true" ]]; then
+    printf '[dry-run] '
+    printf '%q ' "$@"
+    printf '\n'
+    return 0
+  fi
+  "$@"
 }
 
 ask() {
@@ -89,6 +122,14 @@ update_key_value_file() {
   local file="$1"
   local temp_file
   shift
+  if [[ "${DRY_RUN}" == "true" ]]; then
+    say "[dry-run] would update ${file} with:"
+    local pair
+    for pair in "$@"; do
+      say "  - ${pair}"
+    done
+    return 0
+  fi
   temp_file="$(mktemp)"
   python3 - "$file" "$temp_file" "$@" <<'PY'
 import pathlib
@@ -144,12 +185,12 @@ install_native() {
   local confidence="${11}"
   local tag_color="${12}"
 
-  mkdir -p "${install_dir}"
-  install -m 755 "${REPO_DIR}/hooks/ai_enrich.py" "${install_dir}/ai_enrich.py"
-  install -m 644 "${REPO_DIR}/prompts/ai_enrich_prompt.txt" "${install_dir}/ai_enrich_prompt.txt"
-  install -m 644 "${REPO_DIR}/scripts/ai_backfill.py" "${install_dir}/ai_backfill.py"
+  run_or_echo mkdir -p "${install_dir}"
+  run_or_echo install -m 755 "${REPO_DIR}/hooks/ai_enrich.py" "${install_dir}/ai_enrich.py"
+  run_or_echo install -m 644 "${REPO_DIR}/prompts/ai_enrich_prompt.txt" "${install_dir}/ai_enrich_prompt.txt"
+  run_or_echo install -m 644 "${REPO_DIR}/scripts/ai_backfill.py" "${install_dir}/ai_backfill.py"
 
-  cp -a "${conf_file}" "${conf_file}.bak.$(date +%Y%m%d%H%M%S)"
+  run_or_echo cp -a "${conf_file}" "${conf_file}.bak.$(date +%Y%m%d%H%M%S)"
   update_key_value_file "${conf_file}" \
     "PAPERLESS_POST_CONSUME_SCRIPT=${install_dir}/ai_enrich.py" \
     "PAPERLESS_API_URL=${paperless_api_url}" \
@@ -168,13 +209,17 @@ install_native() {
     "PAPERLESS_AI_DEFAULT_TAG_COLOR=${tag_color}" \
     "PAPERLESS_AI_QWEN35_THINK=false"
 
-  install -m 644 "${REPO_DIR}/systemd/paperless-scheduler.service" /etc/systemd/system/paperless-scheduler.service
-  systemctl daemon-reload
+  run_or_echo install -m 644 "${REPO_DIR}/systemd/paperless-scheduler.service" /etc/systemd/system/paperless-scheduler.service
+  run_or_echo systemctl daemon-reload
   if ask_yes_no "Restart native Paperless services now" "y"; then
-    systemctl restart paperless-webserver.service
-    systemctl restart paperless-consumer.service
-    systemctl restart paperless-task-queue.service
-    systemctl restart paperless-scheduler.service || true
+    run_or_echo systemctl restart paperless-webserver.service
+    run_or_echo systemctl restart paperless-consumer.service
+    run_or_echo systemctl restart paperless-task-queue.service
+    if [[ "${DRY_RUN}" == "true" ]]; then
+      say "[dry-run] systemctl restart paperless-scheduler.service"
+    else
+      systemctl restart paperless-scheduler.service || true
+    fi
   fi
 
   if ask_yes_no "Install the local Paperless AI Console on port 3000" "y"; then
@@ -182,21 +227,31 @@ install_native() {
     ui_user="$(ask_required "Local user that should run the web UI")"
     local ui_home
     ui_home="$(eval echo "~${ui_user}")"
-    [[ -d "${ui_home}" ]] || fail "Home directory not found for ${ui_user}"
-    mkdir -p "${ui_home}/ollama-web"
-    install -m 755 "${REPO_DIR}/web/server.py" "${ui_home}/ollama-web/server.py"
-    chown -R "${ui_user}:${ui_user}" "${ui_home}/ollama-web"
+    if [[ "${DRY_RUN}" != "true" ]]; then
+      [[ -d "${ui_home}" ]] || fail "Home directory not found for ${ui_user}"
+    fi
+    run_or_echo mkdir -p "${ui_home}/ollama-web"
+    run_or_echo install -m 755 "${REPO_DIR}/web/server.py" "${ui_home}/ollama-web/server.py"
+    run_or_echo chown -R "${ui_user}:${ui_user}" "${ui_home}/ollama-web"
 
-    install -m 755 "${REPO_DIR}/scripts/paperless-ai-admin" /usr/local/sbin/paperless-ai-admin
-    install -m 755 "${REPO_DIR}/scripts/paperless-set-ollama-model" /usr/local/sbin/paperless-set-ollama-model
+    run_or_echo install -m 755 "${REPO_DIR}/scripts/paperless-ai-admin" /usr/local/sbin/paperless-ai-admin
+    run_or_echo install -m 755 "${REPO_DIR}/scripts/paperless-set-ollama-model" /usr/local/sbin/paperless-set-ollama-model
 
-    sed "s/PAPERLESS_UI_USER/${ui_user}/g" "${REPO_DIR}/systemd/paperless-ai-admin.sudoers.example" > /etc/sudoers.d/paperless-ai-admin
-    sed "s/PAPERLESS_UI_USER/${ui_user}/g" "${REPO_DIR}/systemd/paperless-model.sudoers.example" > /etc/sudoers.d/paperless-model
-    chmod 440 /etc/sudoers.d/paperless-ai-admin /etc/sudoers.d/paperless-model
+    if [[ "${DRY_RUN}" == "true" ]]; then
+      say "[dry-run] would render /etc/sudoers.d/paperless-ai-admin for user ${ui_user}"
+      say "[dry-run] would render /etc/sudoers.d/paperless-model for user ${ui_user}"
+      say "[dry-run] would render /etc/systemd/system/ollama-web.service for user ${ui_user}"
+      say "[dry-run] systemctl daemon-reload"
+      say "[dry-run] systemctl enable --now ollama-web.service"
+    else
+      sed "s/PAPERLESS_UI_USER/${ui_user}/g" "${REPO_DIR}/systemd/paperless-ai-admin.sudoers.example" > /etc/sudoers.d/paperless-ai-admin
+      sed "s/PAPERLESS_UI_USER/${ui_user}/g" "${REPO_DIR}/systemd/paperless-model.sudoers.example" > /etc/sudoers.d/paperless-model
+      chmod 440 /etc/sudoers.d/paperless-ai-admin /etc/sudoers.d/paperless-model
 
-    sed "s/PAPERLESS_UI_USER/${ui_user}/g" "${REPO_DIR}/systemd/ollama-web.service" > /etc/systemd/system/ollama-web.service
-    systemctl daemon-reload
-    systemctl enable --now ollama-web.service
+      sed "s/PAPERLESS_UI_USER/${ui_user}/g" "${REPO_DIR}/systemd/ollama-web.service" > /etc/systemd/system/ollama-web.service
+      systemctl daemon-reload
+      systemctl enable --now ollama-web.service
+    fi
   fi
 }
 
@@ -218,12 +273,15 @@ install_docker() {
   local confidence="${15}"
   local tag_color="${16}"
 
-  mkdir -p "${host_integration_dir}"
-  install -m 755 "${REPO_DIR}/hooks/ai_enrich.py" "${host_integration_dir}/ai_enrich.py"
-  install -m 644 "${REPO_DIR}/prompts/ai_enrich_prompt.txt" "${host_integration_dir}/ai_enrich_prompt.txt"
-  install -m 644 "${REPO_DIR}/scripts/ai_backfill.py" "${host_integration_dir}/ai_backfill.py"
+  run_or_echo mkdir -p "${host_integration_dir}"
+  run_or_echo install -m 755 "${REPO_DIR}/hooks/ai_enrich.py" "${host_integration_dir}/ai_enrich.py"
+  run_or_echo install -m 644 "${REPO_DIR}/prompts/ai_enrich_prompt.txt" "${host_integration_dir}/ai_enrich_prompt.txt"
+  run_or_echo install -m 644 "${REPO_DIR}/scripts/ai_backfill.py" "${host_integration_dir}/ai_backfill.py"
 
-  cat > "${env_file}" <<EOF
+  if [[ "${DRY_RUN}" == "true" ]]; then
+    say "[dry-run] would write env file ${env_file}"
+  else
+    cat > "${env_file}" <<EOF
 PAPERLESS_POST_CONSUME_SCRIPT=${container_integration_dir}/ai_enrich.py
 PAPERLESS_API_URL=${paperless_api_url}
 PAPERLESS_API_TOKEN=${paperless_api_token}
@@ -241,8 +299,12 @@ PAPERLESS_AI_MIN_CONFIDENCE=${confidence}
 PAPERLESS_AI_DEFAULT_TAG_COLOR=${tag_color}
 PAPERLESS_AI_QWEN35_THINK=false
 EOF
+  fi
 
-  cat > "${compose_dir}/docker-compose.override.yml" <<EOF
+  if [[ "${DRY_RUN}" == "true" ]]; then
+    say "[dry-run] would write override file ${compose_dir}/docker-compose.override.yml"
+  else
+    cat > "${compose_dir}/docker-compose.override.yml" <<EOF
 services:
   ${web_service}:
     env_file:
@@ -250,6 +312,7 @@ services:
     volumes:
       - ${host_integration_dir}:${container_integration_dir}:ro
 EOF
+  fi
 
   say ""
   say "Docker files written:"
@@ -260,16 +323,23 @@ EOF
   say ""
   say "Review the generated override if your Paperless service is not named '${web_service}'."
   if ask_yes_no "Run 'docker compose up -d ${web_service}' now" "y"; then
-    (
-      cd "${compose_dir}"
-      docker compose up -d "${web_service}"
-    )
+    if [[ "${DRY_RUN}" == "true" ]]; then
+      say "[dry-run] (cd ${compose_dir} && docker compose up -d ${web_service})"
+    else
+      (
+        cd "${compose_dir}"
+        docker compose up -d "${web_service}"
+      )
+    fi
   fi
 }
 
 say "Paperless AI guided installer"
 say ""
 say "This installer will ask for the values it needs before writing files."
+if [[ "${DRY_RUN}" == "true" ]]; then
+  say "Dry-run mode is active. No files will be written."
+fi
 say ""
 say "You should have ready:"
 say "  - a Paperless API token"

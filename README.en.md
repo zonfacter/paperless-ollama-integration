@@ -66,7 +66,15 @@ The current state of this project reflects a working setup with the following bu
 Recommended entry point:
 
 ```bash
-sudo bash scripts/install-paperless-ai.sh
+curl -fsSL https://raw.githubusercontent.com/zonfacter/paperless-ollama-integration/main/scripts/install-paperless-ai.sh -o /tmp/install-paperless-ai.sh
+sudo bash /tmp/install-paperless-ai.sh
+```
+
+Preview first without changing anything:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/zonfacter/paperless-ollama-integration/main/scripts/install-paperless-ai.sh -o /tmp/install-paperless-ai.sh
+sudo bash /tmp/install-paperless-ai.sh --dry-run
 ```
 
 The installer:

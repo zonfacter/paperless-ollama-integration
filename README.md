@@ -66,7 +66,15 @@ Der aktuelle Stand dieses Projekts bildet eine funktionierende Installation mit 
 Empfohlener Einstieg:
 
 ```bash
-sudo bash scripts/install-paperless-ai.sh
+curl -fsSL https://raw.githubusercontent.com/zonfacter/paperless-ollama-integration/main/scripts/install-paperless-ai.sh -o /tmp/install-paperless-ai.sh
+sudo bash /tmp/install-paperless-ai.sh
+```
+
+Erst pruefen, was gemacht wuerde:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/zonfacter/paperless-ollama-integration/main/scripts/install-paperless-ai.sh -o /tmp/install-paperless-ai.sh
+sudo bash /tmp/install-paperless-ai.sh --dry-run
 ```
 
 Der Installer:

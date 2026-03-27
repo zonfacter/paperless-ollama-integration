@@ -5,7 +5,15 @@
 The easiest path is the guided installer:
 
 ```bash
-sudo bash scripts/install-paperless-ai.sh
+curl -fsSL https://raw.githubusercontent.com/zonfacter/paperless-ollama-integration/main/scripts/install-paperless-ai.sh -o /tmp/install-paperless-ai.sh
+sudo bash /tmp/install-paperless-ai.sh
+```
+
+First check without writing anything:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/zonfacter/paperless-ollama-integration/main/scripts/install-paperless-ai.sh -o /tmp/install-paperless-ai.sh
+sudo bash /tmp/install-paperless-ai.sh --dry-run
 ```
 
 The installer:
@@ -16,6 +24,14 @@ The installer:
   - a Docker / Compose based Paperless setup
 - asks for the required access data before changing files
 - prepares the correct files for the chosen mode
+
+If you prefer reviewing the repository first:
+
+```bash
+git clone https://github.com/zonfacter/paperless-ollama-integration.git
+cd paperless-ollama-integration
+sudo bash scripts/install-paperless-ai.sh --dry-run
+```
 
 ## What You Need Before Starting
 
@@ -100,7 +116,8 @@ sudo chmod 644 /opt/paperless/ai_enrich_prompt.txt
 ## Guided Installer
 
 ```bash
-sudo bash scripts/install-paperless-ai.sh
+curl -fsSL https://raw.githubusercontent.com/zonfacter/paperless-ollama-integration/main/scripts/install-paperless-ai.sh -o /tmp/install-paperless-ai.sh
+sudo bash /tmp/install-paperless-ai.sh
 ```
 
 Was der Installer abfragt:
@@ -114,6 +131,13 @@ Was der Installer abfragt:
 - Timeout
 - OCR-Kontext
 - Mindest-Confidence
+
+Optional:
+
+- `--dry-run`
+  - sammelt alle Eingaben
+  - zeigt die geplanten Dateien und Befehle
+  - schreibt nichts auf das System
 
 Zusatzfragen je nach Modus:
 
