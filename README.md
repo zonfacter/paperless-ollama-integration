@@ -6,27 +6,41 @@ Der aktuelle Stand dieses Projekts bildet eine funktionierende Installation mit 
 
 - `paperless-ngx` als native Systemd-Installation
 - `Ollama` lokal auf `127.0.0.1:11434`
-- `qwen2.5:3b-instruct` als lokales Modell
+- konfigurierbare lokale Modelle in `Ollama`
+- produktiv erprobte Varianten:
+  - `qwen3.5:9b` fuer maximale Qualitaet
+  - `qwen3.5:4b` als CPU-Kompromiss
+  - `qwen2.5:7b-instruct` als robuste Referenz
 - Hook nach erfolgreichem Dokumentimport
 - automatische Vergabe von:
   - Titel
   - Korrespondenz
   - Dokumenttyp
   - Tags
-- minimale Browser-Oberflaeche fuer `Ollama`
+- Review- und Steueroberflaeche auf Port `3000`
 
 ## Projektinhalt
 
 - `hooks/ai_enrich.py`
   - produktiver Hook fuer Paperless
+  - unterstuetzt Modell-Fallback, konfigurierbare Timeouts und `Qwen 3.5` mit deaktiviertem Thinking
 - `prompts/ai_enrich_prompt.txt`
   - externer Prompt, getrennt vom Python-Code
 - `web/server.py`
-  - leichte Weboberflaeche fuer den lokalen `Ollama`-Server
+  - lokale Weboberflaeche fuer:
+    - Chat mit lokalen Modellen
+    - Paperless-Konfiguration
+    - Prompt-Bearbeitung
+    - Review einzelner Dokumente
+    - Backfill fuer Bestandsdokumente
 - `systemd/paperless-scheduler.service`
   - korrigierte Scheduler-Unit auf `celery beat`
 - `systemd/ollama-web.service`
   - Systemd-Unit fuer die lokale Weboberflaeche
+- `scripts/paperless-ai-admin`
+  - Root-Helfer fuer Prompt, Konfiguration und Worker-Neustarts
+- `scripts/paperless-set-ollama-model`
+  - Hilfsskript zum Umschalten des aktiven Paperless-Modells
 - `scripts/configure-paperless-ai-ollama.sh`
   - Konfigurationshilfe fuer `paperless.conf`
 - `docs/`
@@ -41,6 +55,29 @@ Der aktuelle Stand dieses Projekts bildet eine funktionierende Installation mit 
 5. `Ollama` erzeugt eine strukturierte JSON-Antwort.
 6. Der Hook schreibt Titel, Korrespondenz, Dokumenttyp und Tags zurueck.
 
+## Aktueller Workflow
+
+### Neue Dokumente
+
+1. Dokument in `paperless-ngx` hochladen oder in den `consume`-Ordner legen.
+2. `paperless-ngx` importiert das Dokument und erzeugt OCR.
+3. `PAPERLESS_POST_CONSUME_SCRIPT` startet `ai_enrich.py`.
+4. Der Hook liest Dokumentinhalt und Metadaten ueber die Paperless-API.
+5. Das konfigurierte `Ollama`-Modell erzeugt einen JSON-Vorschlag.
+6. Der Hook schreibt das Ergebnis direkt in `paperless-ngx` zurueck.
+
+### Bestehende Dokumente
+
+- Port `3000` bietet einen `Review Workspace` fuer Einzeldokumente:
+  - Dokument suchen
+  - OCR und aktuelle Metadaten ansehen
+  - KI-Vorschau erzeugen
+  - Vorschlag uebernehmen oder verwerfen
+- Port `3000` bietet einen `Backfill` fuer Bestandsdokumente:
+  - nur fehlende Metadaten
+  - alle Dokumente
+  - nur ausgewaehlte Dokumente
+
 ## Wichtige Pfade im produktiven Aufbau
 
 - Hook: `/opt/paperless/ai_enrich.py`
@@ -48,6 +85,25 @@ Der aktuelle Stand dieses Projekts bildet eine funktionierende Installation mit 
 - Paperless-Konfiguration: `/opt/paperless/paperless.conf`
 - Ollama-API: `http://127.0.0.1:11434`
 - lokale Weboberflaeche: `http://<host>:3000`
+
+## Wichtige Funktionen
+
+- konfigurierbarer Prompt ohne Codeaenderung
+- konfigurierbarer OCR-Kontext und Timeout
+- Fallback-Modell fuer `Ollama`
+- Schutz vor halluzinierten Personentags
+- `Qwen 3.5`-Unterstuetzung mit standardmaessig deaktiviertem Thinking
+- Review-Workflow vor dem Schreiben fuer einzelne Dokumente
+
+## Dokumentation
+
+- [INSTALL](docs/INSTALL.md)
+- [OPERATIONS](docs/OPERATIONS.md)
+- [ARCHITECTURE](docs/ARCHITECTURE.md)
+- [PROMPTS](docs/PROMPTS.md)
+- [SECURITY](docs/SECURITY.md)
+- [WEB_UI](docs/WEB_UI.md)
+- [TROUBLESHOOTING](docs/TROUBLESHOOTING.md)
 
 ## Hinweise
 

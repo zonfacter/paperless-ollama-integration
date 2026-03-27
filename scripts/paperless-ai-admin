@@ -1,0 +1,59 @@
+#!/bin/sh
+set -eu
+
+CONF="/opt/paperless/paperless.conf"
+PROMPT="/opt/paperless/ai_enrich_prompt.txt"
+
+restart_workers() {
+  systemctl restart paperless-consumer.service
+  systemctl restart paperless-task-queue.service
+}
+
+set_config() {
+  key="${1:?missing key}"
+  value="${2:?missing value}"
+  case "$key" in
+    PAPERLESS_AI_CONTENT_CHARS|PAPERLESS_AI_MIN_CONFIDENCE|PAPERLESS_AI_HTTP_TIMEOUT_SECONDS|PAPERLESS_AI_DEFAULT_TAG_COLOR|PAPERLESS_AI_OLLAMA_MODEL|PAPERLESS_AI_FALLBACK_ENABLED|PAPERLESS_AI_FALLBACK_MODEL|PAPERLESS_AI_FALLBACK_ON_TIMEOUT_ONLY|PAPERLESS_AI_FALLBACK_HTTP_TIMEOUT_SECONDS)
+      ;;
+    *)
+      echo "unsupported key: $key" >&2
+      exit 1
+      ;;
+  esac
+  if grep -q "^${key}=" "$CONF"; then
+    sed -i "s|^${key}=.*|${key}=${value}|" "$CONF"
+  else
+    printf '\n%s=%s\n' "$key" "$value" >> "$CONF"
+  fi
+  printf '%s=%s\n' "$key" "$value"
+}
+
+set_prompt() {
+  src="${1:?missing source path}"
+  if [ ! -f "$src" ]; then
+    echo "prompt source not found: $src" >&2
+    exit 1
+  fi
+  install -m 644 "$src" "$PROMPT"
+  echo "prompt updated"
+}
+
+cmd="${1:-}"
+case "$cmd" in
+  set-config)
+    shift
+    set_config "$@"
+    ;;
+  set-prompt)
+    shift
+    set_prompt "$@"
+    ;;
+  restart-workers)
+    restart_workers
+    echo "workers restarted"
+    ;;
+  *)
+    echo "usage: $0 set-config <KEY> <VALUE> | set-prompt <FILE> | restart-workers" >&2
+    exit 1
+    ;;
+esac

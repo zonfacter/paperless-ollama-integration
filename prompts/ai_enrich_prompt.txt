@@ -14,6 +14,8 @@ Regeln:
 - Nutze fuer Personen/Institutionen normale Namen, keine Aktenzeichen als Korrespondenz.
 - Nutze keine reinen Empfaengernamen oder Privatpersonen als Tags, wenn sie nur im Briefkopf vorkommen.
 - Bevorzuge thematische Tags statt Personennamen.
+- Personennamen duerfen nur dann als Tag vorgeschlagen werden, wenn der Name exakt in der Liste `Vorhandene Personentags` steht und exakt so im OCR-Inhalt vorkommt.
+- Erfinde niemals neue Personennamen als Tags und aendere existierende Namen nicht.
 - Wenn das Dokument klar juristisch oder behoerdlich ist, nutze passende Begriffe wie Beschluss, Schreiben, Bescheid, Rechnung, Vertrag, Mahnung.
 
 Rueckgabeformat:
@@ -32,6 +34,7 @@ Vorhandene Metadaten:
 - Korrespondenz: {correspondent}
 - Dokumenttyp: {doc_type}
 - Tags: {tags}
+- Vorhandene Personentags: {existing_person_tags}
 
 OCR-Inhalt:
 {content}

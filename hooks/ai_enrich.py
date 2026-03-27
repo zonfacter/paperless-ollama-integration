@@ -27,6 +27,8 @@ Regeln:
 - Nutze fuer Personen/Institutionen normale Namen, keine Aktenzeichen als Korrespondenz.
 - Nutze keine reinen Empfaengernamen oder Privatpersonen als Tags, wenn sie nur im Briefkopf vorkommen.
 - Bevorzuge thematische Tags statt Personennamen.
+- Personennamen duerfen nur dann als Tag vorgeschlagen werden, wenn der Name exakt in der Liste `Vorhandene Personentags` steht und exakt so im OCR-Inhalt vorkommt.
+- Erfinde niemals neue Personennamen als Tags und aendere existierende Namen nicht.
 - Wenn das Dokument klar juristisch oder behoerdlich ist, nutze passende Begriffe wie Beschluss, Schreiben, Bescheid, Rechnung, Vertrag, Mahnung.
 
 Rueckgabeformat:
@@ -45,6 +47,7 @@ Vorhandene Metadaten:
 - Korrespondenz: {correspondent}
 - Dokumenttyp: {doc_type}
 - Tags: {tags}
+- Vorhandene Personentags: {existing_person_tags}
 
 OCR-Inhalt:
 {content}
@@ -72,7 +75,7 @@ class HttpClient:
         self.base_url = base_url.rstrip("/")
         self.token = token
 
-    def _request(self, method: str, path: str, payload: dict | None = None) -> dict | list | str | None:
+    def _request(self, method: str, path: str, payload: dict | None = None, timeout: float | None = None) -> dict | list | str | None:
         if path.startswith("http://") or path.startswith("https://"):
             url = path
         else:
@@ -85,8 +88,9 @@ class HttpClient:
             headers["Content-Type"] = "application/json"
             data = json.dumps(payload).encode("utf-8")
         req = urllib.request.Request(url, data=data, headers=headers, method=method)
+        request_timeout = timeout if timeout is not None else float(env("PAPERLESS_AI_HTTP_TIMEOUT_SECONDS", "300"))
         try:
-            with urllib.request.urlopen(req, timeout=60) as response:
+            with urllib.request.urlopen(req, timeout=request_timeout) as response:
                 raw = response.read()
                 content_type = response.headers.get("Content-Type", "")
                 if not raw:
@@ -101,14 +105,14 @@ class HttpClient:
         except urllib.error.URLError as exc:
             raise RuntimeError(f"{method} {url} failed: {exc}") from exc
 
-    def get(self, path: str) -> dict | list | str | None:
-        return self._request("GET", path)
+    def get(self, path: str, timeout: float | None = None) -> dict | list | str | None:
+        return self._request("GET", path, timeout=timeout)
 
-    def post(self, path: str, payload: dict) -> dict | list | str | None:
-        return self._request("POST", path, payload)
+    def post(self, path: str, payload: dict, timeout: float | None = None) -> dict | list | str | None:
+        return self._request("POST", path, payload, timeout=timeout)
 
-    def patch(self, path: str, payload: dict) -> dict | list | str | None:
-        return self._request("PATCH", path, payload)
+    def patch(self, path: str, payload: dict, timeout: float | None = None) -> dict | list | str | None:
+        return self._request("PATCH", path, payload, timeout=timeout)
 
 
 def normalize_whitespace(value: str) -> str:
@@ -147,7 +151,29 @@ def load_prompt_template() -> str:
     return DEFAULT_PROMPT_TEMPLATE
 
 
-def prompt_for_document(document: dict) -> str:
+def looks_like_person_tag(value: str) -> bool:
+    tokens = [token for token in re.split(r"\s+", normalize_whitespace(value)) if token]
+    if len(tokens) < 2 or len(tokens) > 3:
+        return False
+    for token in tokens:
+        if any(char.isdigit() for char in token):
+            return False
+        parts = [part for part in token.split("-") if part]
+        if not parts:
+            return False
+        for part in parts:
+            if len(part) < 2:
+                return False
+            if not part[0].isupper():
+                return False
+            if not part[1:].islower():
+                return False
+            if not part.replace("'", "").isalpha():
+                return False
+    return True
+
+
+def prompt_for_document(document: dict, existing_person_tags: list[str]) -> str:
     title = document.get("title") or ""
     original = document.get("original_file_name") or ""
     correspondent = (document.get("correspondent") or {}).get("name", "") if isinstance(document.get("correspondent"), dict) else ""
@@ -162,6 +188,7 @@ def prompt_for_document(document: dict) -> str:
         correspondent=correspondent,
         doc_type=doc_type,
         tags=", ".join(tags),
+        existing_person_tags=", ".join(existing_person_tags) or "-",
         content=content,
     )
 
@@ -215,8 +242,8 @@ def call_openai(prompt: str) -> dict:
     return parse_json_object("\n".join(output))
 
 
-def call_ollama(prompt: str) -> dict:
-    model = env("PAPERLESS_AI_OLLAMA_MODEL", "qwen2.5:7b-instruct")
+def call_ollama(prompt: str, model: str | None = None, timeout: float | None = None) -> dict:
+    model = model or env("PAPERLESS_AI_OLLAMA_MODEL", "qwen2.5:7b-instruct")
     host = env("PAPERLESS_AI_OLLAMA_URL", "http://127.0.0.1:11434")
     client = HttpClient(host)
     payload = {
@@ -228,7 +255,12 @@ def call_ollama(prompt: str) -> dict:
             {"role": "user", "content": prompt},
         ],
     }
-    response = client.post("/api/chat", payload)
+    # Qwen 3.5 defaults to visible/internal thinking, which slows down
+    # Paperless JSON extraction heavily. Disable it unless explicitly enabled.
+    if model.startswith("qwen3.5:"):
+        think_enabled = env("PAPERLESS_AI_QWEN35_THINK", "false").lower() in ("1", "true", "yes", "on")
+        payload["think"] = think_enabled
+    response = client.post("/api/chat", payload, timeout=timeout)
     if not isinstance(response, dict):
         raise RuntimeError("Unexpected Ollama response")
     message = response.get("message", {})
@@ -238,13 +270,51 @@ def call_ollama(prompt: str) -> dict:
     return parse_json_object(content)
 
 
-def get_provider_response(prompt: str) -> dict:
+def is_timeout_error(exc: Exception) -> bool:
+    message = str(exc).lower()
+    return isinstance(exc, TimeoutError) or "timed out" in message or "timeout" in message
+
+
+def get_provider_response_details(prompt: str) -> tuple[dict, dict]:
     provider = env("PAPERLESS_AI_PROVIDER", "ollama").lower()
     if provider == "openai":
-        return call_openai(prompt)
+        return call_openai(prompt), {
+            "provider": "openai",
+            "model": env("PAPERLESS_AI_OPENAI_MODEL", "gpt-5.4-mini"),
+            "fallback_used": False,
+        }
     if provider == "ollama":
-        return call_ollama(prompt)
+        primary_model = env("PAPERLESS_AI_OLLAMA_MODEL", "qwen2.5:7b-instruct")
+        primary_timeout = float(env("PAPERLESS_AI_HTTP_TIMEOUT_SECONDS", "300"))
+        fallback_enabled = env("PAPERLESS_AI_FALLBACK_ENABLED", "false").lower() in ("1", "true", "yes", "on")
+        fallback_model = env("PAPERLESS_AI_FALLBACK_MODEL", "qwen2.5:3b-instruct")
+        fallback_timeout = float(env("PAPERLESS_AI_FALLBACK_HTTP_TIMEOUT_SECONDS", str(primary_timeout)))
+        fallback_timeout_only = env("PAPERLESS_AI_FALLBACK_ON_TIMEOUT_ONLY", "true").lower() in ("1", "true", "yes", "on")
+        try:
+            return call_ollama(prompt, model=primary_model, timeout=primary_timeout), {
+                "provider": "ollama",
+                "model": primary_model,
+                "fallback_used": False,
+                "timeout_seconds": primary_timeout,
+            }
+        except Exception as exc:
+            if not fallback_enabled:
+                raise
+            if fallback_timeout_only and not is_timeout_error(exc):
+                raise
+            warn(f"Primary model '{primary_model}' failed, using fallback '{fallback_model}': {exc}")
+            return call_ollama(prompt, model=fallback_model, timeout=fallback_timeout), {
+                "provider": "ollama",
+                "model": fallback_model,
+                "fallback_used": True,
+                "fallback_from": primary_model,
+                "timeout_seconds": fallback_timeout,
+            }
     raise RuntimeError(f"Unsupported PAPERLESS_AI_PROVIDER: {provider}")
+
+
+def get_provider_response(prompt: str) -> dict:
+    return get_provider_response_details(prompt)[0]
 
 
 def list_all(client: HttpClient, path: str) -> list[dict]:
@@ -287,6 +357,45 @@ def ensure_named_object(client: HttpClient, endpoint: str, name: str, extra: dic
         raise RuntimeError(f"Could not create {endpoint} item {name}: {created}")
     log(f"Created {endpoint.strip('/')} '{name}'")
     return int(created["id"])
+
+
+def resolve_tag_ids(client: HttpClient, tag_names: list[str], document_content: str) -> list[int]:
+    existing_tags = list_all(client, "/api/tags/")
+    existing_by_name = {
+        str(tag.get("name", "")).casefold(): tag
+        for tag in existing_tags
+        if isinstance(tag, dict) and tag.get("name")
+    }
+    normalized_content = f" {normalize_whitespace(document_content).casefold()} "
+    resolved_ids: list[int] = []
+    for tag_name in tag_names:
+        normalized = clean_name(tag_name)
+        if not normalized:
+            continue
+        existing = existing_by_name.get(normalized.casefold())
+        if looks_like_person_tag(normalized):
+            if existing is None:
+                log(f"Skipped new person tag '{normalized}': only existing person tags may be reused")
+                continue
+            exact_name = f" {normalized.casefold()} "
+            if exact_name not in normalized_content:
+                log(f"Skipped person tag '{normalized}': name not found exactly in document text")
+                continue
+            resolved_ids.append(int(existing["id"]))
+            continue
+        if existing is not None:
+            resolved_ids.append(int(existing["id"]))
+            continue
+        created_id = ensure_named_object(
+            client,
+            "/api/tags/",
+            normalized,
+            {"color": env("PAPERLESS_AI_DEFAULT_TAG_COLOR", "#4f6bed")},
+        )
+        if created_id is not None:
+            resolved_ids.append(created_id)
+            existing_by_name[normalized.casefold()] = {"id": created_id, "name": normalized}
+    return resolved_ids
 
 
 def sanitize_result(result: dict) -> dict:
@@ -344,11 +453,22 @@ def main() -> int:
     if not isinstance(document, dict):
         raise RuntimeError(f"Unexpected document payload: {document}")
 
-    prompt = prompt_for_document(document)
+    existing_tags = list_all(client, "/api/tags/")
+    existing_person_tags = [
+        str(tag.get("name", ""))
+        for tag in existing_tags
+        if isinstance(tag, dict) and looks_like_person_tag(str(tag.get("name", "")))
+    ]
+
+    prompt = prompt_for_document(document, sorted(existing_person_tags, key=str.casefold))
     started = time.time()
-    result = sanitize_result(get_provider_response(prompt))
+    raw_result, response_meta = get_provider_response_details(prompt)
+    result = sanitize_result(raw_result)
     duration = round(time.time() - started, 2)
-    log(f"LLM analyzed document {document_id} in {duration}s")
+    model_info = response_meta.get("model", "-")
+    if response_meta.get("fallback_used"):
+        model_info = f"{model_info} (fallback from {response_meta.get('fallback_from', '-')})"
+    log(f"LLM analyzed document {document_id} in {duration}s using {model_info}")
 
     if not should_apply(result):
         log(f"Skipped document {document_id}: confidence below threshold")
@@ -375,13 +495,7 @@ def main() -> int:
     current_tags = document.get("tags", [])
     current_tag_ids = [int(tag["id"]) for tag in current_tags if isinstance(tag, dict) and "id" in tag]
     combined_tag_ids = list(current_tag_ids)
-    for tag_name in result["tags"]:
-        tag_id = ensure_named_object(
-            client,
-            "/api/tags/",
-            tag_name,
-            {"color": env("PAPERLESS_AI_DEFAULT_TAG_COLOR", "#4f6bed")},
-        )
+    for tag_id in resolve_tag_ids(client, result["tags"], document.get("content") or ""):
         if tag_id is not None and tag_id not in combined_tag_ids:
             combined_tag_ids.append(tag_id)
     if combined_tag_ids != current_tag_ids:

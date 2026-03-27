@@ -1,0 +1,1 @@
+thomas ALL=(root) NOPASSWD: /usr/local/sbin/paperless-ai-admin *

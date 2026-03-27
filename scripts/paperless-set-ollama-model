@@ -1,0 +1,26 @@
+#!/bin/sh
+set -eu
+
+MODEL="${1:-}"
+CONF="/opt/paperless/paperless.conf"
+
+if [ -z "$MODEL" ]; then
+  echo "usage: $0 <ollama-model>" >&2
+  exit 1
+fi
+
+if [ ! -f "$CONF" ]; then
+  echo "paperless config not found: $CONF" >&2
+  exit 1
+fi
+
+if grep -q '^PAPERLESS_AI_OLLAMA_MODEL=' "$CONF"; then
+  sed -i "s/^PAPERLESS_AI_OLLAMA_MODEL=.*/PAPERLESS_AI_OLLAMA_MODEL=$MODEL/" "$CONF"
+else
+  printf '\nPAPERLESS_AI_OLLAMA_MODEL=%s\n' "$MODEL" >> "$CONF"
+fi
+
+systemctl restart paperless-consumer.service
+systemctl restart paperless-task-queue.service
+
+printf '%s\n' "$MODEL"
