@@ -3,6 +3,7 @@ import base64
 import json
 import importlib.util
 import os
+import re
 import subprocess
 import tempfile
 import threading
@@ -2203,6 +2204,207 @@ def build_document_prompt_with_limit(module, document: dict, existing_person_tag
     )
 
 
+ORG_HINT_TOKENS = (
+    "schule", "realschule", "grundschule", "gymnasium", "berufskolleg", "universit",
+    "amt", "amtsgericht", "landgericht", "gericht", "stadt", "gemeinde", "kreis",
+    "jugendamt", "finanzamt", "behoerde", "praxis", "arzt", "klinik", "krankenhaus",
+    "versicherung", "bank", "sparkasse", "gmbh", "ug", "ag", "kg", "kanzlei", "notar",
+    "steuerberater", "anwalt", "familiengericht", "schulleiter", "schulleitung",
+)
+ROLE_HINT_TOKENS = (
+    "schulleiter", "schulleitung", "richter", "richterin", "arzt", "ärztin", "dr.",
+    "prof.", "kanzlei", "anwalt", "anwältin", "notar", "notarin", "sachbearbeiter",
+    "sachbearbeiterin", "jugendamt", "familiengericht",
+)
+
+
+def is_address_like_line(line: str) -> bool:
+    lowered = line.casefold()
+    if re.search(r"\b\d{5}\b", line):
+        return True
+    if "@" in line or "www." in lowered or "tel." in lowered or "fax" in lowered:
+        return True
+    if re.search(r"\b(?:str\.|straße|weg|platz|allee|gasse|ufer|chaussee)\b", lowered):
+        return True
+    return False
+
+
+def clean_name_like_value(value: str) -> str:
+    text = re.sub(r"\s+", " ", str(value or "")).strip(" ,;-")
+    text = re.sub(r"\b(?:Herr|Frau|Familie)\b\.?\s+", "", text, flags=re.IGNORECASE).strip()
+    return text
+
+
+def extract_person_from_salutation(line: str) -> str:
+    match = re.search(r"(?:Sehr geehrte(?:r)?|Guten Tag|Hallo)\s+(.*)", str(line or ""), re.IGNORECASE)
+    if not match:
+        return ""
+    value = clean_name_like_value(match.group(1))
+    return value.rstrip(",")
+
+
+def looks_like_org_line(line: str) -> bool:
+    lowered = str(line or "").casefold()
+    return any(token in lowered for token in ORG_HINT_TOKENS)
+
+
+def looks_like_role_line(line: str) -> bool:
+    lowered = str(line or "").casefold()
+    return any(token in lowered for token in ROLE_HINT_TOKENS)
+
+
+def extract_person_name_from_line(line: str) -> str:
+    compact = re.sub(r"\s+", " ", str(line or "")).strip()
+    match = re.search(r"\b([A-ZÄÖÜ][a-zäöüß.-]+)\s+([A-ZÄÖÜ][a-zäöüß.-]+)\b", compact)
+    if not match:
+        return ""
+    return clean_name_like_value(f"{match.group(1)} {match.group(2)}")
+
+
+def infer_org_from_email_domain(text: str) -> str:
+    match = re.search(r"@([a-z0-9.-]+\.[a-z]{2,})", str(text or ""), re.IGNORECASE)
+    if not match:
+        return ""
+    domain = match.group(1).split(".", 1)[0]
+    parts = [part for part in re.split(r"[-_]+", domain) if part and part not in {"mail", "verwaltung", "info", "kontakt", "service"}]
+    if not parts:
+        return ""
+    normalized = []
+    for part in parts[:3]:
+        if part in {"gmbh", "ag", "ug", "kg"}:
+            normalized.append(part.upper())
+        else:
+            normalized.append(part.capitalize())
+    return " ".join(normalized).strip()
+
+
+def collapse_org_candidates(lines: list[str]) -> str:
+    usable = [re.sub(r"\s+", " ", line).strip(" ,;-") for line in lines if line and not is_address_like_line(line)]
+    usable = [line for line in usable if len(line) > 2]
+    if not usable:
+        return ""
+    primary = usable[0]
+    if len(usable) > 1 and looks_like_org_line(primary) and not re.search(r"\b[A-ZÄÖÜ][a-zäöüß-]+\b", primary.split()[-1]):
+        merged = f"{primary} {usable[1]}".strip()
+        return re.sub(r"\s+", " ", merged)
+    return primary
+
+
+def derive_document_hints(ocr_view: dict) -> dict:
+    sections = dict(ocr_view.get("sections") or {})
+    cleaned_text = str(ocr_view.get("cleaned_text") or "")
+    header_lines = [line.strip() for line in str(sections.get("header") or "").splitlines() if line.strip()]
+    recipient_lines = [line.strip() for line in str(sections.get("recipient") or "").splitlines() if line.strip()]
+    signature_lines = [line.strip() for line in str(sections.get("signature") or "").splitlines() if line.strip()]
+    salutation = str(sections.get("salutation") or "").strip()
+    subject = str(sections.get("subject") or "").strip()
+
+    sender_candidates = [line for line in header_lines if looks_like_org_line(line)]
+    sender = collapse_org_candidates(sender_candidates[:2])
+    domain_sender = infer_org_from_email_domain(cleaned_text)
+    if domain_sender and (not sender or len(sender) < 10 or sender[:1].isdigit()):
+        sender = domain_sender
+    if not sender:
+        for line in signature_lines:
+            if looks_like_org_line(line) or looks_like_role_line(line):
+                sender = clean_name_like_value(line)
+                break
+
+    recipient = ""
+    if salutation:
+        recipient = extract_person_from_salutation(salutation)
+    recipient_line_name = ""
+    for line in header_lines + recipient_lines:
+        if is_address_like_line(line):
+            extracted = extract_person_name_from_line(line)
+            if extracted:
+                recipient_line_name = extracted
+                break
+    if not recipient:
+        for line in recipient_lines:
+            if is_address_like_line(line):
+                continue
+            candidate = clean_name_like_value(line)
+            if candidate and not looks_like_org_line(candidate):
+                recipient = candidate
+                break
+    if recipient_line_name and (not recipient or len(recipient.split()) < 2):
+        recipient = recipient_line_name
+
+    signer = ""
+    for line in signature_lines:
+        candidate = clean_name_like_value(line)
+        if candidate and candidate.casefold() not in ("mit freundlichen grüßen", "mit freundlichen gruessen"):
+            signer = candidate
+            break
+
+    subject_lines = []
+    if subject:
+        subject_lines.append(subject)
+    for line in recipient_lines[:4]:
+        lowered = line.casefold()
+        if any(token in lowered for token in ("vorlage", "fehlzeiten", "rechnung", "beschluss", "bescheid", "steuer", "attest", "klage", "urteil")):
+            if line not in subject_lines:
+                subject_lines.append(line)
+    subject_hint = " / ".join(subject_lines[:2]).strip()
+
+    guidance = []
+    if sender:
+        guidance.append(f"Mutmasslicher Absender: {sender}")
+    if recipient:
+        guidance.append(f"Mutmasslicher Adressat: {recipient}")
+        guidance.append("Adressat oder Name aus der Anrede ist nicht die Korrespondenz.")
+    if signer:
+        guidance.append(f"Mutmassliche Signatur: {signer}")
+    if subject_hint:
+        guidance.append(f"Mutmasslicher Betreff: {subject_hint}")
+    if sender and signer and sender.casefold() not in signer.casefold():
+        guidance.append("Bevorzuge die Organisation im Briefkopf als Korrespondenz vor einzelnen Namen in Signatur oder Anrede.")
+
+    return {
+        "sender": sender,
+        "recipient": recipient,
+        "signer": signer,
+        "subject": subject_hint,
+        "guidance_text": "\n".join(guidance).strip(),
+    }
+
+
+def apply_rule_based_preview_corrections(proposal: dict, document_hints: dict) -> dict:
+    corrected = dict(proposal)
+    sender = clean_name_like_value(document_hints.get("sender", ""))
+    recipient = clean_name_like_value(document_hints.get("recipient", ""))
+    subject = str(document_hints.get("subject") or "").strip()
+    signer = clean_name_like_value(document_hints.get("signer", ""))
+
+    correspondent = clean_name_like_value(corrected.get("correspondent", ""))
+    if recipient and correspondent and correspondent.casefold() == recipient.casefold() and sender:
+        corrected["correspondent"] = sender
+    elif sender and (
+        not correspondent
+        or looks_like_role_line(correspondent)
+        or correspondent.casefold() == signer.casefold()
+        or (recipient and recipient.casefold() in correspondent.casefold())
+    ):
+        corrected["correspondent"] = sender
+
+    title = str(corrected.get("title") or "").strip()
+    if title.lower().startswith("dokumententyp:"):
+        title = re.sub(r"^Dokumententyp:\s*", "", title, flags=re.IGNORECASE).strip()
+    if subject and (not title or title.casefold() in {recipient.casefold(), signer.casefold()}):
+        corrected["title"] = subject
+    elif subject and sender and len(title) < 12:
+        corrected["title"] = f"{subject} {sender}".strip()
+    elif subject and sender and title:
+        lowered = title.casefold()
+        if sender.casefold() not in lowered and subject.casefold() not in lowered:
+            corrected["title"] = f"{subject} {sender}".strip()
+        else:
+            corrected["title"] = title
+
+    return corrected
+
+
 def normalize_ocr_lines(raw_text: str) -> list[str]:
     text = (raw_text or "").replace("\r\n", "\n").replace("\r", "\n")
     text = re.sub(r"[ \t]+", " ", text)
@@ -2279,7 +2481,7 @@ def build_structured_ocr_view(raw_text: str) -> dict:
     salutation_idx = None
     salutation = ""
     for idx, line in enumerate(lines):
-        if re.match(r"^(Sehr geehrt|Sehr geehrte|Guten Tag|Hallo|An das|An die)\b", line):
+        if re.match(r"^(Sehr geehrte(?:r|n)?|Guten Tag|Hallo|An das|An die)\b", line):
             salutation_idx = idx
             salutation = line
             break
@@ -2346,16 +2548,36 @@ def build_structured_ocr_view(raw_text: str) -> dict:
 
 def build_vision_review_prompt(module, document: dict, ocr_proposal: dict, existing_person_tags: list[str], content_chars: int) -> str:
     ocr_excerpt = module.truncate_text(document.get("content") or "", content_chars)
+    ocr_structure = str(ocr_proposal.get("_ocr_structure_summary") or "").strip()
+    ocr_hints = str(ocr_proposal.get("_ocr_hints_summary") or "").strip()
     return f"""Visueller Review fuer paperless-ngx.
 Antworte nur als JSON.
 
 Behalte den OCR-Vorschlag als Standard.
+Pruefe nur diese Felder gezielt gegen das Seitenbild:
+- `correspondent`
+- `title`
+- `document_type`
+
 Korrigiere nur, wenn das Seitenbild klar bessere Hinweise liefert.
-Nutze das Bild vor allem fuer Absender, Dokumentart und Betreff.
+Nutze das Bild vor allem fuer Briefkopf, Adressfeld, Betreffzeile, Signatur und Dokumentart.
+Fasse den Titel normal und knapp zusammen. Schreibe niemals Vorsaetze wie `Dokumententyp:` in den Titel.
+Setze `correspondent` konservativ. Wenn Absender nicht klar lesbar ist, lasse den OCR-Wert stehen statt zu raten.
+Lass `tags` leer, ausser das Bild liefert eine eindeutig bessere Korrektur.
+`refined_excerpt` muss immer befuellt werden:
+- 3 bis 6 kurze Zeilen
+- nur klar lesbare Kernpunkte aus dem Seitenbild
+- bevorzugt: Absender, Adressat, Datum, Betreff, Signatur
 Keine neuen Personentags ausser aus dieser Liste: {", ".join(existing_person_tags) or "-"}
 
 OCR-Vorschlag:
 {json.dumps({"title": ocr_proposal.get("title", ""), "correspondent": ocr_proposal.get("correspondent", ""), "document_type": ocr_proposal.get("document_type", ""), "tags": ocr_proposal.get("tags", [])}, ensure_ascii=True)}
+
+OCR-Struktur:
+{ocr_structure or "-"}
+
+Regelhinweise:
+{ocr_hints or "-"}
 
 Kurzer OCR-Auszug:
 {ocr_excerpt}
@@ -2373,19 +2595,7 @@ def merge_hybrid_proposals(base: dict, vision: dict) -> dict:
         merged["correspondent"] = vision["correspondent"]
     if vision.get("document_type"):
         merged["document_type"] = vision["document_type"]
-    combined_tags: list[str] = []
-    seen: set[str] = set()
-    for source in (base.get("tags", []), vision.get("tags", [])):
-        for tag in source:
-            tag_name = str(tag).strip()
-            if not tag_name:
-                continue
-            key = tag_name.casefold()
-            if key in seen:
-                continue
-            seen.add(key)
-            combined_tags.append(tag_name)
-    merged["tags"] = combined_tags[:6]
+    merged["tags"] = list(base.get("tags", []))[:6]
     try:
         base_conf = float(base.get("confidence") or 0)
     except (TypeError, ValueError):
@@ -2403,7 +2613,10 @@ def merge_hybrid_proposals(base: dict, vision: dict) -> dict:
     if vision_reason:
         reasons.append(f"Vision: {vision_reason}")
     merged["reason"] = "\n".join(reasons)[:200]
-    merged["_vision_refined_excerpt"] = str(vision.get("refined_excerpt") or "").strip()[:1200]
+    refined_excerpt = str(vision.get("refined_excerpt") or "").strip()
+    if not refined_excerpt:
+        refined_excerpt = str(base.get("_ocr_hints_summary") or "").strip()
+    merged["_vision_refined_excerpt"] = refined_excerpt[:1200]
     return merged
 
 
@@ -2571,9 +2784,11 @@ def build_ai_preview(document_id: int, use_vision: bool = False) -> tuple[int, d
         if isinstance(tag, dict) and module.looks_like_person_tag(str(tag.get("name", "")))
     ]
     ocr_view = build_structured_ocr_view(str(document.get("content") or ""))
+    document_hints = derive_document_hints(ocr_view)
     prompt_document = dict(document)
     prompt_document["content"] = "\n\n".join(
         part for part in (
+            document_hints.get("guidance_text", "").strip(),
             ocr_view.get("structured_summary", "").strip(),
             ocr_view.get("cleaned_text", "").strip(),
         ) if part
@@ -2588,6 +2803,7 @@ def build_ai_preview(document_id: int, use_vision: bool = False) -> tuple[int, d
     preview_ocr_model = preview_config.get("preview_ocr_model", "") or None
     raw_result, response_meta = get_preview_response_details(module, prompt, model=preview_ocr_model)
     proposal = module.sanitize_result(raw_result)
+    proposal = apply_rule_based_preview_corrections(proposal, document_hints)
     proposal["_model"] = response_meta.get("model", "")
     proposal["_ocr_model"] = response_meta.get("model", "")
     proposal["_fallback_used"] = bool(response_meta.get("fallback_used"))
@@ -2602,6 +2818,7 @@ def build_ai_preview(document_id: int, use_vision: bool = False) -> tuple[int, d
     proposal["_vision_refined_excerpt"] = ""
     proposal["_ocr_cleaned_excerpt"] = str(ocr_view.get("cleaned_text") or "")[:1600]
     proposal["_ocr_structure_summary"] = str(ocr_view.get("structured_summary") or "")[:1600]
+    proposal["_ocr_hints_summary"] = str(document_hints.get("guidance_text") or "")[:1200]
     preview_job = None
     if use_vision:
         proposal["_vision_requested"] = True
