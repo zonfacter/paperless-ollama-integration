@@ -51,7 +51,7 @@ Der aktuelle Stand dieses Projekts bildet eine funktionierende Installation mit 
 
 - `hooks/ai_enrich.py`
   - produktiver Hook fuer Paperless
-  - unterstuetzt Modell-Fallback, konfigurierbare Timeouts und `Qwen 3.5` mit deaktiviertem Thinking
+  - unterstuetzt Modell-Fallback, konfigurierbare Timeouts, `Qwen 3.5` mit deaktiviertem Thinking und eine begrenzte Ollama-Thread-Zahl fuer CPU-VMs
 - `prompts/ai_enrich_prompt.txt`
   - externer Prompt, getrennt vom Python-Code
 - `web/server.py`
@@ -62,6 +62,7 @@ Der aktuelle Stand dieses Projekts bildet eine funktionierende Installation mit 
     - Prompt-Bearbeitung
     - Review einzelner Dokumente
     - Backfill fuer Bestandsdokumente
+  - uebernimmt dieselbe Ollama-Thread-Begrenzung fuer Chat, Preview und Vision
 - `systemd/paperless-scheduler.service`
   - korrigierte Scheduler-Unit auf `celery beat`
 - `systemd/ollama-web.service`

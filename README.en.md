@@ -51,7 +51,7 @@ The current state of this project reflects a working setup with the following bu
 
 - `hooks/ai_enrich.py`
   - production hook for Paperless
-  - supports model fallback, configurable timeouts, and `Qwen 3.5` with thinking disabled
+  - supports model fallback, configurable timeouts, `Qwen 3.5` with thinking disabled, and a bounded Ollama thread count for CPU VMs
 - `prompts/ai_enrich_prompt.txt`
   - external prompt, separated from Python code
 - `web/server.py`
@@ -62,6 +62,7 @@ The current state of this project reflects a working setup with the following bu
     - prompt editing
     - single-document review
     - backfill for existing documents
+  - applies the same Ollama thread cap to chat, preview, and vision requests
 - `systemd/paperless-scheduler.service`
   - corrected scheduler unit using `celery beat`
 - `systemd/ollama-web.service`

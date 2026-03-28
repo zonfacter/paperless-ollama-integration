@@ -70,6 +70,16 @@ def warn(message: str) -> None:
     print(f"[paperless-ai] WARN: {message}", file=sys.stderr, flush=True)
 
 
+def positive_int(value: str | None, default: int) -> int:
+    if value is None:
+        return default
+    try:
+        parsed = int(str(value).strip())
+    except (TypeError, ValueError):
+        return default
+    return parsed if parsed > 0 else default
+
+
 class HttpClient:
     def __init__(self, base_url: str, token: str | None = None):
         self.base_url = base_url.rstrip("/")
@@ -246,10 +256,12 @@ def call_ollama(prompt: str, model: str | None = None, timeout: float | None = N
     model = model or env("PAPERLESS_AI_OLLAMA_MODEL", "qwen2.5:7b-instruct")
     host = env("PAPERLESS_AI_OLLAMA_URL", "http://127.0.0.1:11434")
     client = HttpClient(host)
+    num_thread = positive_int(env("PAPERLESS_AI_OLLAMA_NUM_THREAD", "4"), 4)
     payload = {
         "model": model,
         "stream": False,
         "format": "json",
+        "options": {"num_thread": num_thread},
         "messages": [
             {"role": "system", "content": "Du gibst ausschliesslich valides JSON aus."},
             {"role": "user", "content": prompt},

@@ -2,6 +2,13 @@
 
 ## 2026-03-28
 
+### Ollama Thread Tuning
+
+- `Ollama`-Anfragen im produktiven Hook standardmaessig auf `4` Threads begrenzt
+- denselben `4`-Thread-Deckel fuer Chat, Preview und Vision in der Port-`3000`-Webkonsole aktiviert
+- Thread-Zahl als konfigurierbarer Wert ueber `PAPERLESS_AI_OLLAMA_NUM_THREAD` bzw. `OLLAMA_NUM_THREAD` vorbereitet
+- CPU-VM auf einen realistischeren Sweet Spot fuer Inferenz statt ungebremster Mehr-Thread-Auslastung abgestimmt
+
 ### Hybrid Review, Preview Controls, And UX Clarification
 
 - Port-`3000`-Review von rein synchroner Vorschau auf asynchronen Hybrid-Workflow weiterentwickelt

@@ -1844,6 +1844,14 @@ def ollama_request(path: str, payload: dict | None = None) -> tuple[int, dict]:
         return 500, {"error": str(exc)}
 
 
+def positive_int(value: str | int | None, default: int) -> int:
+    try:
+        parsed = int(str(value).strip())
+    except (AttributeError, TypeError, ValueError):
+        return default
+    return parsed if parsed > 0 else default
+
+
 def load_paperless_env() -> dict[str, str]:
     env_map: dict[str, str] = {}
     path = Path(PAPERLESS_CONF)
@@ -1856,6 +1864,14 @@ def load_paperless_env() -> dict[str, str]:
         key, value = stripped.split("=", 1)
         env_map[key.strip()] = value.strip()
     return env_map
+
+
+def ollama_num_thread() -> int:
+    try:
+        env_map = load_paperless_env()
+    except Exception:
+        env_map = {}
+    return positive_int(env_map.get("PAPERLESS_AI_OLLAMA_NUM_THREAD") or os.getenv("OLLAMA_NUM_THREAD") or "4", 4)
 
 
 def default_preview_config() -> dict[str, str]:
@@ -2277,10 +2293,12 @@ def call_ollama_preview(module, prompt: str, image_payloads: list[str] | None, m
     user_message: dict[str, object] = {"role": "user", "content": prompt}
     if image_payloads:
         user_message["images"] = image_payloads
+    num_thread = ollama_num_thread()
     payload: dict[str, object] = {
         "model": model,
         "stream": False,
         "format": "json",
+        "options": {"num_thread": num_thread},
         "messages": [
             {"role": "system", "content": "Du gibst ausschliesslich valides JSON aus."},
             user_message,
@@ -2662,6 +2680,11 @@ class Handler(BaseHTTPRequestHandler):
             return
         if self.path == "/api/chat":
             payload["stream"] = False
+            options = payload.get("options")
+            if not isinstance(options, dict):
+                options = {}
+            options["num_thread"] = ollama_num_thread()
+            payload["options"] = options
             status, response = ollama_request("/api/chat", payload)
         elif self.path == "/api/paperless/model":
             try:
