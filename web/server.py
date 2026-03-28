@@ -2444,12 +2444,7 @@ def canonical_subject(subject: str) -> str:
 
 
 def normalize_sender_label(sender: str) -> str:
-    value = re.sub(r"\s+", " ", str(sender or "")).strip(" ,;-")
-    replacements = {
-        "Realschule Hoevelhof": "Realschule Hövelhof",
-        "Amtsgericht Guetersloh": "Amtsgericht Gütersloh",
-    }
-    return replacements.get(value, value)
+    return re.sub(r"\s+", " ", str(sender or "")).strip(" ,;-")
 
 
 def build_domain_title(document_hints: dict, proposal: dict) -> str:
@@ -2784,7 +2779,7 @@ def run_hybrid_vision_review(job_id: str, document: dict, proposal: dict, existi
             model=preview_config.get("vision_model", "qwen3.5:0.8b"),
             timeout=float(preview_config.get("vision_timeout_seconds", "120")),
         )
-        vision_proposal = module.sanitize_result(vision_raw)
+        vision_proposal = module.refine_result(module.sanitize_result(vision_raw), document)
         merged = merge_hybrid_proposals(proposal, vision_proposal)
         merged["_model"] = proposal.get("_model", "")
         merged["_ocr_model"] = proposal.get("_ocr_model", proposal.get("_model", ""))
@@ -2929,7 +2924,7 @@ def build_ai_preview(document_id: int, use_vision: bool = False) -> tuple[int, d
     started = time.time()
     preview_ocr_model = preview_config.get("preview_ocr_model", "") or None
     raw_result, response_meta = get_preview_response_details(module, prompt, model=preview_ocr_model)
-    proposal = module.sanitize_result(raw_result)
+    proposal = module.refine_result(module.sanitize_result(raw_result), document)
     proposal = apply_rule_based_preview_corrections(proposal, document_hints)
     proposal["_model"] = response_meta.get("model", "")
     proposal["_ocr_model"] = response_meta.get("model", "")
@@ -2988,7 +2983,7 @@ def apply_ai_preview(document_id: int, proposal: dict) -> tuple[int, dict]:
     document = client.get(f"/api/documents/{document_id}/")
     if not isinstance(document, dict):
         return 500, {"error": f"Unexpected document payload: {document}"}
-    result = module.sanitize_result(proposal)
+    result = module.refine_result(module.sanitize_result(proposal), document)
     if not module.should_apply(result):
         return 400, {"error": "Proposal confidence below threshold"}
     payload: dict = {}

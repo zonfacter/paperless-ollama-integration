@@ -438,6 +438,97 @@ def sanitize_result(result: dict) -> dict:
     }
 
 
+def detect_document_family(document: dict, result: dict) -> str:
+    haystack = " ".join(
+        str(value or "")
+        for value in (
+            document.get("content", ""),
+            document.get("title", ""),
+            document.get("original_file_name", ""),
+            result.get("title", ""),
+            result.get("document_type", ""),
+            result.get("correspondent", ""),
+            result.get("reason", ""),
+        )
+    ).casefold()
+    if any(token in haystack for token in ("amtsgericht", "landgericht", "oberlandesgericht", "familiengericht", "beschluss", "pflegschaft", "sofortige beschwerde")):
+        return "court"
+    if any(token in haystack for token in ("schule", "realschule", "gymnasium", "schulleiter", "fehltag", "schulpflicht", "attest")):
+        return "school"
+    if any(token in haystack for token in ("arzt", "ärzt", "praxis", "klinik", "krankenhaus", "diagnose", "befund", "attest")):
+        return "medical"
+    if any(token in haystack for token in ("finanzamt", "steuer", "elster", "umsatzsteuer", "einkommensteuer", "steuerbescheid")):
+        return "tax"
+    return ""
+
+
+def canonicalize_tag(tag: str) -> str:
+    value = clean_name(tag)
+    mapping = {
+        "ärztliche atteste": "Attest",
+        "aerztliche atteste": "Attest",
+        "ärztliche bescheinigung": "Attest",
+        "aerztliche bescheinigung": "Attest",
+        "schulpflichtverletzung": "Schulpflicht",
+        "fehlzeiten-attestforderung": "Fehlzeiten",
+        "minderjährige kinder": "Minderjährige",
+    }
+    return mapping.get(value.casefold(), value)
+
+
+def looks_like_institution_tag(tag: str) -> bool:
+    lowered = clean_name(tag).casefold()
+    return any(token in lowered for token in (
+        "schule", "gericht", "amt", "behörde", "behoerde", "finanzamt",
+        "realschule", "gymnasium", "familiengericht", "landgericht", "amtsgericht",
+        "praxis", "klinik", "krankenhaus",
+    ))
+
+
+def refine_tags(result: dict, document: dict) -> list[str]:
+    family = detect_document_family(document, result)
+    correspondent = clean_name(str(result.get("correspondent", ""))).casefold()
+    document_type = clean_name(str(result.get("document_type", ""))).casefold()
+    title = clean_name(str(result.get("title", ""))).casefold()
+    refined: list[str] = []
+    seen: set[str] = set()
+    for raw_tag in result.get("tags", []):
+        tag = canonicalize_tag(str(raw_tag))
+        if not tag:
+            continue
+        key = tag.casefold()
+        if key in seen:
+            continue
+        if looks_like_person_tag(tag):
+            continue
+        if correspondent and (key == correspondent or key in correspondent or correspondent in key):
+            continue
+        if document_type and (key == document_type or key in document_type):
+            continue
+        if title and len(key) > 5 and key in title:
+            continue
+        if re.fullmatch(r"\d{4}", tag):
+            continue
+        if family == "school":
+            if key == "schule" or looks_like_institution_tag(tag):
+                continue
+        if family == "court":
+            if looks_like_institution_tag(tag):
+                continue
+        if family == "tax":
+            if looks_like_institution_tag(tag):
+                continue
+        seen.add(key)
+        refined.append(tag[:50])
+    return refined[:6]
+
+
+def refine_result(result: dict, document: dict) -> dict:
+    refined = dict(result)
+    refined["tags"] = refine_tags(refined, document)
+    return refined
+
+
 def should_apply(result: dict) -> bool:
     threshold = float(env("PAPERLESS_AI_MIN_CONFIDENCE", "0.35"))
     confidence = result.get("confidence")
@@ -475,7 +566,7 @@ def main() -> int:
     prompt = prompt_for_document(document, sorted(existing_person_tags, key=str.casefold))
     started = time.time()
     raw_result, response_meta = get_provider_response_details(prompt)
-    result = sanitize_result(raw_result)
+    result = refine_result(sanitize_result(raw_result), document)
     duration = round(time.time() - started, 2)
     model_info = response_meta.get("model", "-")
     if response_meta.get("fallback_used"):
