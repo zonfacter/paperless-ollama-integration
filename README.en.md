@@ -46,6 +46,7 @@ The current state of this project reflects a working setup with the following bu
   - tags
 - review and control UI on port `3000`
 - separate preview/vision rules for the review UI
+- OCR tuning for scan PDFs with `force`, `deu+eng`, and optional `tessdata_best`
 
 ## Project Contents
 
@@ -146,12 +147,35 @@ The installer:
 
 - configurable prompt without code changes
 - configurable OCR context and timeout
+- OCR tuning for scan PDFs with `force`, `deu+eng`, and `tessdata_best`
 - fallback model support for `Ollama`
 - protection against hallucinated person tags
 - `Qwen 3.5` support with thinking disabled by default
 - review workflow before writing metadata for single documents
 - asynchronous hybrid preview with OCR first and optional vision follow-up
 - separate web configuration for preview OCR model, vision model, page limit, and vision tagging
+
+## OCR Notes
+
+For real scan PDFs, `PAPERLESS_OCR_MODE=force` proved more robust than `redo` in this project once cleanup options such as `clean`, `deskew`, and `rotate-pages` were enabled together.
+
+Recommended OCR baseline for German-heavy scans:
+
+- `PAPERLESS_OCR_LANGUAGE=deu+eng`
+- `PAPERLESS_OCR_MODE=force`
+- `PAPERLESS_OCR_IMAGE_DPI=300`
+- `PAPERLESS_OCR_CLEAN=clean`
+- `PAPERLESS_OCR_DESKEW=true`
+- `PAPERLESS_OCR_ROTATE_PAGES=true`
+
+If you use `tessdata_best`, the target data path must contain more than just `.traineddata` files.
+It also needs the standard Tesseract support files:
+
+- `configs/`
+- `tessconfigs/`
+- `pdf.ttf`
+
+A language-only directory without those files can cause OCRmyPDF to fail when requesting `hocr` and `txt` output.
 
 ## Documentation
 

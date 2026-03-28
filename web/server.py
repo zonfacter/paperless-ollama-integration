@@ -853,6 +853,16 @@ HTML = """<!doctype html>
                       <h3>OCR-Vorschau</h3>
                       <div id="doc-detail-ocr" class="ocr-box">Noch kein Dokument ausgewaehlt.</div>
                     </div>
+                    <div class="detail-card">
+                      <h3>OCR-Struktur</h3>
+                      <div class="detail-sub">Heuristisch erkannte Bereiche wie Briefkopf, Adressat, Datum, Betreff und Signatur ueber mehrere Seiten hinweg.</div>
+                      <div id="doc-detail-ocr-structure" class="ocr-box">Noch keine OCR-Struktur erkannt.</div>
+                    </div>
+                    <div class="detail-card">
+                      <h3>Vision-Lesefassung</h3>
+                      <div class="detail-sub">Optional bereinigte Kurzfassung wichtiger sichtbarer Angaben. Der rohe OCR-Text bleibt unveraendert.</div>
+                      <div id="doc-detail-vision-text" class="ocr-box">Noch keine Vision-Lesefassung vorhanden.</div>
+                    </div>
                   </div>
                   <div class="detail-grid">
                     <div class="detail-card">
@@ -1122,6 +1132,8 @@ HTML = """<!doctype html>
     const docSelectionInfoEl = document.getElementById('doc-selection-info');
     const docDetailMetaEl = document.getElementById('doc-detail-meta');
     const docDetailOcrEl = document.getElementById('doc-detail-ocr');
+    const docDetailOcrStructureEl = document.getElementById('doc-detail-ocr-structure');
+    const docDetailVisionTextEl = document.getElementById('doc-detail-vision-text');
     const docDetailStatusEl = document.getElementById('doc-detail-status');
     const docPreviewSingleBtn = document.getElementById('doc-preview-single');
     const docPreviewVisionEl = document.getElementById('doc-preview-vision');
@@ -1229,6 +1241,14 @@ HTML = """<!doctype html>
       docSelectionInfoEl.textContent = `${count} Dokumente ausgewaehlt.`;
     }
 
+    function getSelectedDocumentIdForSingleActions() {
+      if (activeDocumentId) return activeDocumentId;
+      if (selectedDocumentIds.size === 1) {
+        return Array.from(selectedDocumentIds)[0];
+      }
+      return null;
+    }
+
     function formatValue(value) {
       if (value === null || value === undefined || value === '') return '-';
       if (Array.isArray(value)) return value.length ? value.join(', ') : '-';
@@ -1269,12 +1289,18 @@ HTML = """<!doctype html>
         </label>
       `).join('');
       docListEl.querySelectorAll('input[type="checkbox"]').forEach(box => {
-        box.addEventListener('change', () => {
+        box.addEventListener('change', async () => {
           const docId = Number(box.dataset.docId);
           if (box.checked) {
             selectedDocumentIds.add(docId);
+            if (!activeDocumentId || selectedDocumentIds.size === 1) {
+              await loadDocumentDetail(docId);
+            }
           } else {
             selectedDocumentIds.delete(docId);
+            if (activeDocumentId === docId && selectedDocumentIds.size === 1) {
+              await loadDocumentDetail(Array.from(selectedDocumentIds)[0]);
+            }
           }
           renderSelectionInfo();
         });
@@ -1305,8 +1331,19 @@ HTML = """<!doctype html>
         <div class="meta-row"><div class="meta-label">Tags</div><div>${formatValue(tags)}</div></div>
       `;
       docDetailOcrEl.textContent = doc.content || 'Kein OCR-Inhalt vorhanden.';
+      docDetailOcrStructureEl.textContent = 'Noch keine OCR-Struktur erkannt.';
+      docDetailVisionTextEl.textContent = 'Noch keine Vision-Lesefassung vorhanden.';
       renderProposal(null);
       renderDocumentList();
+    }
+
+    function getHybridStatusText(proposal) {
+      if (!proposal) return 'Kein Vorschlag geladen.';
+      if (proposal._hybrid_pending) return 'OCR-Vorschlag geladen. Vision-Review laeuft im Hintergrund...';
+      if (proposal._vision_used) return `Hybrid abgeschlossen. Vision hat ${proposal._vision_pages || 0} Seite(n) geprueft.`;
+      if (proposal._vision_error) return `OCR-Vorschlag geladen. Vision-Review fehlgeschlagen: ${proposal._vision_error}`;
+      if (proposal._vision_requested) return 'OCR-Vorschlag geladen. Vision wurde fuer dieses Dokument uebersprungen.';
+      return 'OCR-Vorschlag geladen.';
     }
 
     function renderProposal(proposal) {
@@ -1314,6 +1351,8 @@ HTML = """<!doctype html>
       if (!proposal) {
         docProposalMetaEl.innerHTML = '<div class="doc-empty">Noch kein KI-Vorschlag vorhanden.</div>';
         docProposalReasonEl.textContent = 'Noch kein KI-Vorschlag vorhanden.';
+        docDetailOcrStructureEl.textContent = 'Noch keine OCR-Struktur erkannt.';
+        docDetailVisionTextEl.textContent = 'Noch keine Vision-Lesefassung vorhanden.';
         docApplyProposalBtn.disabled = true;
         docDiscardProposalBtn.disabled = true;
         docProposalStatusEl.textContent = 'Kein Vorschlag geladen.';
@@ -1328,24 +1367,21 @@ HTML = """<!doctype html>
         <div class="meta-row"><div class="meta-label">Confidence</div><div>${formatValue(proposal.confidence)}</div></div>
         <div class="meta-row"><div class="meta-label">Modell</div><div>${formatValue(proposal._model)}</div></div>
         <div class="meta-row"><div class="meta-label">Fallback</div><div>${proposal._fallback_used ? `ja, von ${formatValue(proposal._fallback_from)}` : 'nein'}</div></div>
-        <div class="meta-row"><div class="meta-label">Hybrid</div><div>${proposal._hybrid_used ? 'ja' : 'nein'}</div></div>
+        <div class="meta-row"><div class="meta-label">Hybrid</div><div>${proposal._hybrid_used ? 'ja' : proposal._hybrid_pending ? 'laeuft' : proposal._vision_requested ? 'angefragt' : 'nein'}</div></div>
         <div class="meta-row"><div class="meta-label">OCR-Modell</div><div>${formatValue(proposal._ocr_model || proposal._model)}</div></div>
         <div class="meta-row"><div class="meta-label">Vision-Modell</div><div>${proposal._vision_used ? formatValue(proposal._vision_model) : '-'}</div></div>
-        <div class="meta-row"><div class="meta-label">Vision</div><div>${proposal._vision_used ? `ja, ${proposal._vision_pages || 0} Seite(n)` : 'nein'}</div></div>
+        <div class="meta-row"><div class="meta-label">Vision</div><div>${proposal._vision_used ? `ja, ${proposal._vision_pages || 0} Seite(n)` : proposal._hybrid_pending ? 'laeuft' : proposal._vision_requested ? 'angefragt' : 'nein'}</div></div>
       `;
       docProposalReasonEl.textContent = proposal.reason || '-';
       if (proposal._vision_error) {
         docProposalReasonEl.textContent += `\n\nVision-Hinweis: ${proposal._vision_error}`;
       }
+      docDetailOcrStructureEl.textContent = proposal._ocr_structure_summary || 'Noch keine OCR-Struktur erkannt.';
+      docDetailVisionTextEl.textContent = proposal._vision_refined_excerpt || 'Noch keine Vision-Lesefassung vorhanden.';
       docApplyProposalBtn.disabled = false;
       docDiscardProposalBtn.disabled = false;
-      if (proposal._hybrid_pending) {
-        docProposalStatusEl.textContent = 'OCR-Vorschlag geladen. Vision-Review laeuft im Hintergrund...';
-        docProposalStatusEl.className = 'statusline';
-      } else {
-        docProposalStatusEl.textContent = 'KI-Vorschlag geladen.';
-        docProposalStatusEl.className = 'statusline';
-      }
+      docProposalStatusEl.textContent = getHybridStatusText(proposal);
+      docProposalStatusEl.className = proposal._vision_error ? 'statusline warn' : 'statusline';
     }
 
     async function pollPreviewJob(jobId) {
@@ -1400,22 +1436,28 @@ HTML = """<!doctype html>
     }
 
     async function runSingleDocument(dryRun) {
-      if (!activeDocumentId) {
-        docDetailStatusEl.textContent = 'Kein Dokument ausgewaehlt.';
+      const documentId = getSelectedDocumentIdForSingleActions();
+      if (!documentId) {
+        docDetailStatusEl.textContent = selectedDocumentIds.size > 1
+          ? 'Mehrere Dokumente markiert. Bitte ein Detaildokument oeffnen oder nur eines markieren.'
+          : 'Kein Dokument ausgewaehlt.';
         docDetailStatusEl.className = 'statusline warn';
         return;
       }
+      if (activeDocumentId !== documentId) {
+        await loadDocumentDetail(documentId);
+      }
       docPreviewSingleBtn.disabled = true;
       docRunSingleBtn.disabled = true;
-      docDetailStatusEl.textContent = dryRun ? `Vorschau fuer #${activeDocumentId} laeuft...` : `Einzellauf fuer #${activeDocumentId} laeuft...`;
+      docDetailStatusEl.textContent = dryRun ? `Vorschau fuer #${documentId} laeuft...` : `Einzellauf fuer #${documentId} laeuft...`;
       docDetailStatusEl.className = 'statusline';
       try {
-        const url = dryRun ? `/api/paperless/document/${activeDocumentId}/preview` : '/api/paperless/backfill';
+        const url = dryRun ? `/api/paperless/document/${documentId}/preview` : '/api/paperless/backfill';
         const payload = dryRun ? {
           use_vision: docPreviewVisionEl.checked
         } : {
           dry_run: false,
-          document_ids: [activeDocumentId],
+          document_ids: [documentId],
           mode: 'selected'
         };
         const res = await fetch(url, {
@@ -1429,15 +1471,15 @@ HTML = """<!doctype html>
           renderProposal(data.proposal || null);
           backfillLogEl.textContent = JSON.stringify(data.proposal || {}, null, 2);
           if (data.preview_job && data.preview_job.id) {
-            docDetailStatusEl.textContent = `OCR-Vorschau fuer #${activeDocumentId} abgeschlossen. Vision-Review laeuft...`;
+            docDetailStatusEl.textContent = `OCR-Vorschau fuer #${documentId} abgeschlossen. Vision-Review laeuft...`;
             pollPreviewJob(data.preview_job.id);
           } else {
-            docDetailStatusEl.textContent = `Vorschau fuer #${activeDocumentId} abgeschlossen.`;
+            docDetailStatusEl.textContent = `Vorschau fuer #${documentId} abgeschlossen.`;
           }
         } else {
           backfillLogEl.textContent = data.output || 'Keine Ausgabe';
-          docDetailStatusEl.textContent = `Einzellauf fuer #${activeDocumentId} abgeschlossen.`;
-          await loadDocumentDetail(activeDocumentId);
+          docDetailStatusEl.textContent = `Einzellauf fuer #${documentId} abgeschlossen.`;
+          await loadDocumentDetail(documentId);
           await loadDocuments();
         }
       } catch (err) {
@@ -2161,6 +2203,147 @@ def build_document_prompt_with_limit(module, document: dict, existing_person_tag
     )
 
 
+def normalize_ocr_lines(raw_text: str) -> list[str]:
+    text = (raw_text or "").replace("\r\n", "\n").replace("\r", "\n")
+    text = re.sub(r"[ \t]+", " ", text)
+    text = text.replace("’", "'").replace("„", '"').replace("“", '"')
+    lines = [line.strip(" \t") for line in text.split("\n")]
+    cleaned: list[str] = []
+    previous_blank = True
+    for line in lines:
+        line = re.sub(r"\s{2,}", " ", line).strip()
+        if not line:
+            if not previous_blank:
+                cleaned.append("")
+            previous_blank = True
+            continue
+        if len(line) == 1 and not line.isdigit():
+            continue
+        cleaned.append(line)
+        previous_blank = False
+    while cleaned and not cleaned[-1]:
+        cleaned.pop()
+    return cleaned
+
+
+def collapse_paragraph_lines(lines: list[str]) -> list[str]:
+    if not lines:
+        return []
+    paragraphs: list[str] = []
+    current: list[str] = []
+    for line in lines:
+        if not line:
+            if current:
+                paragraphs.append(" ".join(current).strip())
+                current = []
+            continue
+        if current:
+            joinable = (
+                not current[-1].endswith((".", ":", ";", "!", "?"))
+                and line[:1].islower()
+            )
+            if joinable:
+                current[-1] = f"{current[-1]} {line}"
+            else:
+                current.append(line)
+        else:
+            current.append(line)
+    if current:
+        paragraphs.append(" ".join(current).strip())
+    return paragraphs
+
+
+def build_structured_ocr_view(raw_text: str) -> dict:
+    lines = normalize_ocr_lines(raw_text)
+    cleaned_text = "\n".join(lines).strip()
+    paragraphs = collapse_paragraph_lines(lines)
+
+    subject_idx = None
+    subject_value = ""
+    for idx, line in enumerate(lines):
+        lowered = line.casefold()
+        if any(token in lowered for token in ("betreff", "vorlage", "rechnung", "beschluss", "bescheid", "mahnbescheid", "fehlzeiten", "steuer", "attest", "klage", "urteil")):
+            if len(line) <= 140:
+                subject_idx = idx
+                subject_value = line
+                break
+
+    date_idx = None
+    date_value = ""
+    for idx, line in enumerate(lines):
+        if re.search(r"\b\d{1,2}\.\d{1,2}\.\d{2,4}\b", line):
+            date_idx = idx
+            date_value = line
+            break
+
+    salutation_idx = None
+    salutation = ""
+    for idx, line in enumerate(lines):
+        if re.match(r"^(Sehr geehrt|Sehr geehrte|Guten Tag|Hallo|An das|An die)\b", line):
+            salutation_idx = idx
+            salutation = line
+            break
+
+    closing_idx = None
+    for idx, line in enumerate(lines):
+        if re.match(r"^(Mit freundlichen Gru[eü]ßen|Freundliche Gr[uü][ßs]e|Hochachtungsvoll)\b", line):
+            closing_idx = idx
+            break
+
+    recipient_lines: list[str] = []
+    if date_idx is not None:
+        start = max(0, date_idx - 6)
+        recipient_lines = [line for line in lines[start:date_idx] if line]
+
+    header_lines: list[str] = []
+    if recipient_lines and date_idx is not None:
+        header_lines = [line for line in lines[: max(0, date_idx - len(recipient_lines))] if line]
+    elif date_idx is not None:
+        header_lines = [line for line in lines[:date_idx] if line]
+    else:
+        header_lines = [line for line in lines[:8] if line]
+
+    body_lines: list[str] = []
+    if salutation_idx is not None:
+        end_idx = closing_idx if closing_idx is not None else len(lines)
+        body_lines = [line for line in lines[salutation_idx + 1:end_idx] if line]
+    elif subject_idx is not None:
+        body_lines = [line for line in lines[subject_idx + 1:] if line][:30]
+
+    signature_lines: list[str] = []
+    if closing_idx is not None:
+        signature_lines = [line for line in lines[closing_idx:] if line][:6]
+
+    sections = {
+        "header": "\n".join(header_lines[:8]).strip(),
+        "recipient": "\n".join(recipient_lines[:6]).strip(),
+        "date": date_value.strip(),
+        "subject": subject_value.strip(),
+        "salutation": salutation.strip(),
+        "body": "\n\n".join(body_lines[:8]).strip(),
+        "signature": "\n".join(signature_lines).strip(),
+    }
+    summary_parts = []
+    for label, key in (
+        ("Briefkopf", "header"),
+        ("Adressat", "recipient"),
+        ("Datum", "date"),
+        ("Betreff", "subject"),
+        ("Anrede", "salutation"),
+        ("Signatur", "signature"),
+    ):
+        value = sections.get(key, "").strip()
+        if value:
+            summary_parts.append(f"{label}:\n{value}")
+    structured_summary = "\n\n".join(summary_parts).strip()
+    return {
+        "cleaned_text": cleaned_text[:6000],
+        "structured_summary": structured_summary[:2400],
+        "sections": sections,
+        "paragraphs": paragraphs[:40],
+    }
+
+
 def build_vision_review_prompt(module, document: dict, ocr_proposal: dict, existing_person_tags: list[str], content_chars: int) -> str:
     ocr_excerpt = module.truncate_text(document.get("content") or "", content_chars)
     return f"""Visueller Review fuer paperless-ngx.
@@ -2178,7 +2361,7 @@ Kurzer OCR-Auszug:
 {ocr_excerpt}
 
 Antwortformat:
-{{"title":"","correspondent":"","document_type":"","tags":[],"confidence":0.0,"reason":""}}
+{{"title":"","correspondent":"","document_type":"","tags":[],"confidence":0.0,"reason":"","refined_excerpt":""}}
 """
 
 
@@ -2220,6 +2403,7 @@ def merge_hybrid_proposals(base: dict, vision: dict) -> dict:
     if vision_reason:
         reasons.append(f"Vision: {vision_reason}")
     merged["reason"] = "\n".join(reasons)[:200]
+    merged["_vision_refined_excerpt"] = str(vision.get("refined_excerpt") or "").strip()[:1200]
     return merged
 
 
@@ -2272,6 +2456,7 @@ def run_hybrid_vision_review(job_id: str, document: dict, proposal: dict, existi
         merged["_vision_error"] = ""
         merged["_hybrid_used"] = True
         merged["_hybrid_pending"] = False
+        merged["_vision_requested"] = True
         store_preview_job(job_id, {"status": "done", "proposal": merged, "updated_at": time.time()})
     except Exception as exc:
         store_preview_job(job_id, {"status": "error", "error": str(exc), "updated_at": time.time()})
@@ -2385,7 +2570,20 @@ def build_ai_preview(document_id: int, use_vision: bool = False) -> tuple[int, d
         for tag in existing_tags
         if isinstance(tag, dict) and module.looks_like_person_tag(str(tag.get("name", "")))
     ]
-    prompt = module.prompt_for_document(document, sorted(existing_person_tags, key=str.casefold))
+    ocr_view = build_structured_ocr_view(str(document.get("content") or ""))
+    prompt_document = dict(document)
+    prompt_document["content"] = "\n\n".join(
+        part for part in (
+            ocr_view.get("structured_summary", "").strip(),
+            ocr_view.get("cleaned_text", "").strip(),
+        ) if part
+    ) or str(document.get("content") or "")
+    prompt = build_document_prompt_with_limit(
+        module,
+        prompt_document,
+        sorted(existing_person_tags, key=str.casefold),
+        int(paperless_env.get("PAPERLESS_AI_CONTENT_CHARS", "5000") or "5000"),
+    )
     started = time.time()
     preview_ocr_model = preview_config.get("preview_ocr_model", "") or None
     raw_result, response_meta = get_preview_response_details(module, prompt, model=preview_ocr_model)
@@ -2400,8 +2598,13 @@ def build_ai_preview(document_id: int, use_vision: bool = False) -> tuple[int, d
     proposal["_hybrid_used"] = False
     proposal["_vision_model"] = ""
     proposal["_hybrid_pending"] = False
+    proposal["_vision_requested"] = False
+    proposal["_vision_refined_excerpt"] = ""
+    proposal["_ocr_cleaned_excerpt"] = str(ocr_view.get("cleaned_text") or "")[:1600]
+    proposal["_ocr_structure_summary"] = str(ocr_view.get("structured_summary") or "")[:1600]
     preview_job = None
     if use_vision:
+        proposal["_vision_requested"] = True
         original_name = str(document.get("original_file_name") or "").lower()
         if original_name.endswith(".pdf"):
             page_count = int(document.get("page_count") or 0)

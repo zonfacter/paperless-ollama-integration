@@ -46,6 +46,7 @@ Der aktuelle Stand dieses Projekts bildet eine funktionierende Installation mit 
   - Tags
 - Review- und Steueroberflaeche auf Port `3000`
 - getrennte Preview-/Vision-Regeln fuer die Review-Oberflaeche
+- OCR fuer Scan-PDFs mit `force`, `deu+eng` und optionalem `tessdata_best`
 
 ## Projektinhalt
 
@@ -146,12 +147,34 @@ Der Installer:
 
 - konfigurierbarer Prompt ohne Codeaenderung
 - konfigurierbarer OCR-Kontext und Timeout
+- OCR-Tuning fuer Scan-PDFs mit `force`, `deu+eng` und `tessdata_best`
 - Fallback-Modell fuer `Ollama`
 - Schutz vor halluzinierten Personentags
 - `Qwen 3.5`-Unterstuetzung mit standardmaessig deaktiviertem Thinking
 - Review-Workflow vor dem Schreiben fuer einzelne Dokumente
 - asynchrone Hybrid-Vorschau mit OCR-Entwurf und optionaler Vision-Nachpruefung
 - getrennte Web-Konfiguration fuer Vorschau-OCR-Modell, Vision-Modell, Seitenlimit und Vision-Tag
+
+## OCR-Hinweise
+
+Fuer echte Scan-PDFs hat sich in diesem Projekt `PAPERLESS_OCR_MODE=force` als robuster erwiesen als `redo`, sobald zusaetzlich Bereinigung wie `clean`, `deskew` und `rotate-pages` aktiv sein soll.
+
+Empfohlene OCR-Basis fuer deutschsprachige Scans:
+
+- `PAPERLESS_OCR_LANGUAGE=deu+eng`
+- `PAPERLESS_OCR_MODE=force`
+- `PAPERLESS_OCR_IMAGE_DPI=300`
+- `PAPERLESS_OCR_CLEAN=clean`
+- `PAPERLESS_OCR_DESKEW=true`
+- `PAPERLESS_OCR_ROTATE_PAGES=true`
+
+Wenn `tessdata_best` genutzt wird, muessen neben den `.traineddata`-Dateien auch die normalen Tesseract-Zusatzdateien im Zielpfad liegen:
+
+- `configs/`
+- `tessconfigs/`
+- `pdf.ttf`
+
+Ein reiner Sprachdaten-Ordner ohne diese Dateien kann OCRmyPDF bei `hocr`- und `txt`-Ausgaben scheitern lassen.
 
 ## Dokumentation
 

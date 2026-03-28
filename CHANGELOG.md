@@ -2,6 +2,16 @@
 
 ## 2026-03-28
 
+### OCR Pipeline Hardening
+
+- Paperless-OCR fuer echte Scans auf `PAPERLESS_OCR_MODE=force` statt `redo` korrigiert
+- `deu+eng` als kombinierte OCR-Sprache fuer gemischte deutsche Dokumente aktiviert
+- `PAPERLESS_OCR_IMAGE_DPI=300`, `PAPERLESS_OCR_CLEAN=clean`, `PAPERLESS_OCR_DESKEW=true` und `PAPERLESS_OCR_ROTATE_PAGES=true` als produktive Scan-Defaults dokumentiert
+- `tessdata_best` fuer `deu`, `eng` und `osd` integriert
+- korrigiert, dass ein reiner `TESSDATA_PREFIX` mit nur `.traineddata`-Dateien unvollstaendig ist
+- fehlende Tesseract-Konfigurationsdateien (`configs/`, `tessconfigs/`, `pdf.ttf`) als notwendiger Teil eines funktionierenden `tessdata_best`-Layouts festgehalten
+- OCR-Verbesserung an einem echten Problem-PDF praktisch gegengeprueft
+
 ### Ollama Thread Tuning
 
 - `Ollama`-Anfragen im produktiven Hook standardmaessig auf `4` Threads begrenzt
