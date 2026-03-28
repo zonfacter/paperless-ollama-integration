@@ -2258,7 +2258,27 @@ def extract_person_name_from_line(line: str) -> str:
     match = re.search(r"\b([A-ZÄÖÜ][a-zäöüß.-]+)\s+([A-ZÄÖÜ][a-zäöüß.-]+)\b", compact)
     if not match:
         return ""
-    return clean_name_like_value(f"{match.group(1)} {match.group(2)}")
+    candidate = clean_name_like_value(f"{match.group(1)} {match.group(2)}")
+    if candidate.casefold() in {"förmliche zustellung", "foermliche zustellung"}:
+        return ""
+    return candidate
+
+
+def canonical_org_name(value: str) -> str:
+    text = re.sub(r"\s+", " ", str(value or "")).strip(" ,;-")
+    patterns = (
+        r"(Amtsgericht\s+[A-ZÄÖÜ][A-Za-zÄÖÜäöüß.-]+)",
+        r"(Landgericht\s+[A-ZÄÖÜ][A-Za-zÄÖÜäöüß.-]+)",
+        r"(Oberlandesgericht\s+[A-ZÄÖÜ][A-Za-zÄÖÜäöüß.-]+)",
+        r"(Finanzamt\s+[A-ZÄÖÜ][A-Za-zÄÖÜäöüß.-]+)",
+        r"(Realschule\s+[A-ZÄÖÜ][A-Za-zÄÖÜäöüß.-]+)",
+        r"(Gymnasium\s+[A-ZÄÖÜ][A-Za-zÄÖÜäöüß.-]+)",
+    )
+    for pattern in patterns:
+        match = re.search(pattern, text, re.IGNORECASE)
+        if match:
+            return normalize_sender_label(match.group(1))
+    return normalize_sender_label(text)
 
 
 def infer_org_from_email_domain(text: str) -> str:
@@ -2278,16 +2298,35 @@ def infer_org_from_email_domain(text: str) -> str:
     return " ".join(normalized).strip()
 
 
+def sanitize_org_candidate(line: str) -> str:
+    value = re.sub(r"\s+", " ", str(line or "")).strip(" ,;-")
+    value = re.sub(r"^[\"'`|{(\\\[\]]+\s*", "", value)
+    value = re.sub(r"\s*[\"'`|})\\\[\]]+$", "", value)
+    return value.strip()
+
+
 def collapse_org_candidates(lines: list[str]) -> str:
-    usable = [re.sub(r"\s+", " ", line).strip(" ,;-") for line in lines if line and not is_address_like_line(line)]
+    usable = [
+        sanitize_org_candidate(line)
+        for line in lines
+        if line and (looks_like_org_line(line) or not is_address_like_line(line))
+    ]
     usable = [line for line in usable if len(line) > 2]
     if not usable:
         return ""
+    for line in usable:
+        lowered = line.casefold()
+        if ("amtsgericht" in lowered or "landgericht" in lowered or "oberlandesgericht" in lowered) and not re.search(r"[{}()]", line):
+            return canonical_org_name(line)
+    for line in usable:
+        lowered = line.casefold()
+        if "realschule" in lowered or "schule" in lowered:
+            return canonical_org_name(line)
     primary = usable[0]
     if len(usable) > 1 and looks_like_org_line(primary) and not re.search(r"\b[A-ZÄÖÜ][a-zäöüß-]+\b", primary.split()[-1]):
         merged = f"{primary} {usable[1]}".strip()
-        return re.sub(r"\s+", " ", merged)
-    return primary
+        return canonical_org_name(re.sub(r"\s+", " ", merged))
+    return canonical_org_name(primary)
 
 
 def derive_document_hints(ocr_view: dict) -> dict:
@@ -2325,7 +2364,7 @@ def derive_document_hints(ocr_view: dict) -> dict:
             if is_address_like_line(line):
                 continue
             candidate = clean_name_like_value(line)
-            if candidate and not looks_like_org_line(candidate):
+            if candidate and not looks_like_org_line(candidate) and "förmliche zustellung" not in candidate.casefold():
                 recipient = candidate
                 break
     if recipient_line_name and (not recipient or len(recipient.split()) < 2):
@@ -2370,15 +2409,99 @@ def derive_document_hints(ocr_view: dict) -> dict:
     }
 
 
+def detect_document_family(document_hints: dict, proposal: dict) -> str:
+    haystack = " ".join(
+        str(value or "")
+        for value in (
+            document_hints.get("sender", ""),
+            document_hints.get("subject", ""),
+            document_hints.get("signer", ""),
+            proposal.get("document_type", ""),
+            proposal.get("title", ""),
+            proposal.get("reason", ""),
+        )
+    ).casefold()
+    if any(token in haystack for token in ("gericht", "beschluss", "sofortige beschwerde", "familiengericht", "amtsgericht", "landgericht", "oberlandesgericht")):
+        return "court"
+    if any(token in haystack for token in ("schule", "realschule", "gymnasium", "schul", "schulleiter", "fehltag", "attest")):
+        return "school"
+    if any(token in haystack for token in ("arzt", "ärzt", "praxis", "klinik", "krankenhaus", "medizin", "attest")):
+        return "medical"
+    if any(token in haystack for token in ("finanzamt", "steuer", "elster", "umsatzsteuer", "einkommensteuer", "bescheid")):
+        return "tax"
+    return ""
+
+
+def canonical_subject(subject: str) -> str:
+    value = re.sub(r"\s+", " ", str(subject or "")).strip(" ,;-")
+    replacements = {
+        "Fehlzeiten des Schülers / der Schülerin": "Fehlzeiten",
+        "Fehlzeiten des Schuelers / der Schuelerin": "Fehlzeiten",
+        "Vorlage ärztlicher Atteste": "Vorlage ärztlicher Atteste",
+        "Vorlage aerztlicher Atteste": "Vorlage ärztlicher Atteste",
+    }
+    return replacements.get(value, value)
+
+
+def normalize_sender_label(sender: str) -> str:
+    value = re.sub(r"\s+", " ", str(sender or "")).strip(" ,;-")
+    replacements = {
+        "Realschule Hoevelhof": "Realschule Hövelhof",
+        "Amtsgericht Guetersloh": "Amtsgericht Gütersloh",
+    }
+    return replacements.get(value, value)
+
+
+def build_domain_title(document_hints: dict, proposal: dict) -> str:
+    family = detect_document_family(document_hints, proposal)
+    sender = normalize_sender_label(document_hints.get("sender", ""))
+    subject = canonical_subject(document_hints.get("subject", ""))
+    doc_type = re.sub(r"\s+", " ", str(proposal.get("document_type") or "")).strip(" ,;-")
+
+    if family == "school":
+        if "attest" in subject.casefold():
+            return f"Schule: {subject}"
+        if subject:
+            return f"Schule: {subject}"
+        return f"Schule: {sender}" if sender else ""
+
+    if family == "court":
+        title_core = "Beschluss"
+        if doc_type:
+            title_core = doc_type
+        elif subject and not re.search(r"[{}]|umsatzsteuer|id", subject, re.IGNORECASE):
+            title_core = subject
+        return f"{sender}: {title_core}".strip(": ") if sender else title_core
+
+    if family == "medical":
+        if doc_type:
+            return f"Medizin: {doc_type}"
+        if subject:
+            return f"Medizin: {subject}"
+        return f"Medizin: {sender}" if sender else ""
+
+    if family == "tax":
+        if doc_type:
+            return f"Steuer: {doc_type}"
+        if subject:
+            return f"Steuer: {subject}"
+        return f"Steuer: {sender}" if sender else ""
+
+    return ""
+
+
 def apply_rule_based_preview_corrections(proposal: dict, document_hints: dict) -> dict:
     corrected = dict(proposal)
-    sender = clean_name_like_value(document_hints.get("sender", ""))
+    sender = normalize_sender_label(clean_name_like_value(document_hints.get("sender", "")))
     recipient = clean_name_like_value(document_hints.get("recipient", ""))
     subject = str(document_hints.get("subject") or "").strip()
     signer = clean_name_like_value(document_hints.get("signer", ""))
+    family = detect_document_family(document_hints, corrected)
 
     correspondent = clean_name_like_value(corrected.get("correspondent", ""))
-    if recipient and correspondent and correspondent.casefold() == recipient.casefold() and sender:
+    if family in {"school", "court", "tax"} and sender:
+        corrected["correspondent"] = sender
+    elif recipient and correspondent and correspondent.casefold() == recipient.casefold() and sender:
         corrected["correspondent"] = sender
     elif sender and (
         not correspondent
@@ -2401,6 +2524,10 @@ def apply_rule_based_preview_corrections(proposal: dict, document_hints: dict) -
             corrected["title"] = f"{subject} {sender}".strip()
         else:
             corrected["title"] = title
+
+    domain_title = build_domain_title(document_hints, corrected)
+    if domain_title:
+        corrected["title"] = domain_title
 
     return corrected
 
