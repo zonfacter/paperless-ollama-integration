@@ -45,6 +45,7 @@ Der aktuelle Stand dieses Projekts bildet eine funktionierende Installation mit 
   - Dokumenttyp
   - Tags
 - Review- und Steueroberflaeche auf Port `3000`
+- getrennte Preview-/Vision-Regeln fuer die Review-Oberflaeche
 
 ## Projektinhalt
 
@@ -57,6 +58,7 @@ Der aktuelle Stand dieses Projekts bildet eine funktionierende Installation mit 
   - lokale Weboberflaeche fuer:
     - Chat mit lokalen Modellen
     - Paperless-Konfiguration
+    - eigene Preview- und Vision-Konfiguration fuer die Review-Vorschau
     - Prompt-Bearbeitung
     - Review einzelner Dokumente
     - Backfill fuer Bestandsdokumente
@@ -124,6 +126,7 @@ Der Installer:
   - Dokument suchen
   - OCR und aktuelle Metadaten ansehen
   - KI-Vorschau erzeugen
+  - optional Hybrid `OCR + Vision` fuer kurze PDFs
   - Vorschlag uebernehmen oder verwerfen
 - Port `3000` bietet einen `Backfill` fuer Bestandsdokumente:
   - nur fehlende Metadaten
@@ -146,6 +149,8 @@ Der Installer:
 - Schutz vor halluzinierten Personentags
 - `Qwen 3.5`-Unterstuetzung mit standardmaessig deaktiviertem Thinking
 - Review-Workflow vor dem Schreiben fuer einzelne Dokumente
+- asynchrone Hybrid-Vorschau mit OCR-Entwurf und optionaler Vision-Nachpruefung
+- getrennte Web-Konfiguration fuer Vorschau-OCR-Modell, Vision-Modell, Seitenlimit und Vision-Tag
 
 ## Dokumentation
 

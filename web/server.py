@@ -1,12 +1,16 @@
 #!/usr/bin/env python3
+import base64
 import json
 import importlib.util
 import os
 import subprocess
+import tempfile
+import threading
 import time
 import urllib.error
 import urllib.parse
 import urllib.request
+import uuid
 from pathlib import Path
 from http.server import BaseHTTPRequestHandler
 from http.server import ThreadingHTTPServer
@@ -19,6 +23,9 @@ PAPERLESS_CONF = os.getenv("PAPERLESS_CONF", "/opt/paperless/paperless.conf")
 PAPERLESS_BACKFILL = os.getenv("PAPERLESS_BACKFILL", "/opt/paperless/ai_backfill.py")
 PAPERLESS_MODEL_HELPER = os.getenv("PAPERLESS_MODEL_HELPER", "/usr/local/sbin/paperless-set-ollama-model")
 PAPERLESS_AI_HELPER = os.getenv("PAPERLESS_AI_HELPER", "/usr/local/sbin/paperless-ai-admin")
+PREVIEW_CONFIG_PATH = os.getenv("PAPERLESS_PREVIEW_CONFIG_PATH", "/home/thomas/ollama-web/preview_config.json")
+PREVIEW_JOBS: dict[str, dict] = {}
+PREVIEW_JOBS_LOCK = threading.Lock()
 
 
 HTML = """<!doctype html>
@@ -835,6 +842,11 @@ HTML = """<!doctype html>
                         <button id="doc-preview-single" class="secondary">Nur dieses Dokument Vorschau</button>
                         <button id="doc-run-single">Nur dieses Dokument neu pruefen</button>
                       </div>
+                      <label class="check">
+                        <input id="doc-preview-vision" type="checkbox">
+                        Hybrid OCR + Vision fuer PDF-Seite 1 aktivieren
+                      </label>
+                      <div class="detail-sub">OCR erstellt den Entwurf, Vision prueft Briefkopf, Layout und schwer lesbare Stellen gezielt nach.</div>
                       <div id="doc-detail-status" class="statusline">Kein Einzel-Lauf gestartet.</div>
                     </div>
                     <div class="detail-card">
@@ -889,22 +901,27 @@ HTML = """<!doctype html>
                   <div class="field">
                     <label for="paperless-model">Primärmodell</label>
                     <select id="paperless-model"></select>
+                    <small>Dieses Modell nutzt der eigentliche Paperless-Import für neue Dokumente und Backfills.</small>
                   </div>
                   <div class="field">
                     <label for="paperless-fallback-model">Fallback-Modell</label>
                     <select id="paperless-fallback-model"></select>
+                    <small>Optionales Ersatzmodell, wenn das Primärmodell scheitert oder zu lange braucht.</small>
                   </div>
                   <label class="check">
                     <input id="paperless-fallback-enabled" type="checkbox">
                     Fallback aktivieren
+                    <small>Nur sinnvoll, wenn du bewusst ein kleineres Sicherheitsnetz neben dem Hauptmodell willst.</small>
                   </label>
                   <label class="check">
                     <input id="paperless-fallback-timeout-only" type="checkbox" checked>
                     Fallback nur bei Timeout
+                    <small>Empfohlen. So springt das Fallback nicht bei jedem beliebigen Modellfehler an.</small>
                   </label>
                   <div class="field">
                     <label for="paperless-fallback-timeout">Fallback-Timeout in Sekunden</label>
                     <input id="paperless-fallback-timeout" type="number" min="30" step="30">
+                    <small>Wie lange das Ersatzmodell maximal laufen darf, bevor auch dieser Versuch abgebrochen wird.</small>
                   </div>
                 </div>
                 <div class="actions">
@@ -932,18 +949,22 @@ HTML = """<!doctype html>
                   <div class="field">
                     <label for="cfg-content-chars">OCR-Zeichen</label>
                     <input id="cfg-content-chars" type="number" min="1000" step="1000">
+                    <small>So viel OCR-Text geht in den normalen Paperless-Lauf. Mehr Text bringt mehr Kontext, kostet aber Zeit.</small>
                   </div>
                   <div class="field">
                     <label for="cfg-min-confidence">Mindest-Confidence</label>
                     <input id="cfg-min-confidence" type="number" min="0" max="1" step="0.05">
+                    <small>Unterhalb dieses Werts werden KI-Vorschläge im Auto-Lauf nicht automatisch übernommen.</small>
                   </div>
                   <div class="field">
                     <label for="cfg-timeout">HTTP-Timeout in Sekunden</label>
                     <input id="cfg-timeout" type="number" min="30" step="30">
+                    <small>Maximale Laufzeit für das aktive Paperless-Modell pro Dokument im Hintergrundbetrieb.</small>
                   </div>
                   <div class="field">
                     <label for="cfg-tag-color">Standard-Tag-Farbe</label>
                     <input id="cfg-tag-color" type="text" placeholder="#4f6bed">
+                    <small>Diese Farbe wird für neu von der KI angelegte Tags genutzt, wenn noch kein Tag vorhanden ist.</small>
                   </div>
                 </div>
                 <div class="actions">
@@ -951,6 +972,64 @@ HTML = """<!doctype html>
                   <button id="reload-ai-config" class="secondary">Neu laden</button>
                 </div>
                 <div id="ai-config-status" class="statusline">Konfiguration noch nicht geladen.</div>
+              </div>
+              <div class="section">
+                <div class="section-head">
+                  <div>
+                    <h2>Preview & Vision</h2>
+                    <p>
+                      Diese Einstellungen betreffen nur die Vorschau in Port 3000. Damit kannst du die
+                      Review-Ansicht schneller machen, ohne den eigentlichen Paperless-Import zu veraendern.
+                    </p>
+                  </div>
+                  <div class="summary-bar">
+                    <span class="pill">Vorschau</span>
+                    <span class="pill">Vision</span>
+                    <span class="pill">Tagging</span>
+                  </div>
+                </div>
+                <div class="config-grid">
+                  <div class="field">
+                    <label for="preview-ocr-model">Vorschau-OCR-Modell</label>
+                    <select id="preview-ocr-model"></select>
+                    <small>Dieses Modell erzeugt den ersten Vorschlag in der Review-Ansicht. Kleiner ist schneller, groesser meist genauer.</small>
+                  </div>
+                  <div class="field">
+                    <label for="preview-vision-model">Vision-Modell</label>
+                    <select id="preview-vision-model"></select>
+                    <small>Dieses Modell prueft bei PDFs zusaetzlich das Seitenbild. Es aendert nichts am normalen Paperless-Import.</small>
+                  </div>
+                  <div class="field">
+                    <label for="preview-vision-content-chars">Vision OCR-Zeichen</label>
+                    <input id="preview-vision-content-chars" type="number" min="200" step="100">
+                    <small>So viel OCR-Text bekommt der Vision-Schritt zusaetzlich zum Bild. Kleinere Werte sind meist deutlich schneller.</small>
+                  </div>
+                  <div class="field">
+                    <label for="preview-vision-timeout">Vision-Timeout in Sekunden</label>
+                    <input id="preview-vision-timeout" type="number" min="10" step="10">
+                    <small>Nach dieser Zeit wird der Vision-Schritt beendet. Der OCR-Vorschlag bleibt trotzdem erhalten.</small>
+                  </div>
+                  <div class="field">
+                    <label for="preview-vision-max-pages">Vision nur bis Seitenzahl</label>
+                    <input id="preview-vision-max-pages" type="number" min="1" step="1">
+                    <small>Nur PDFs bis zu dieser Seitenzahl starten automatisch den Vision-Review. Laengere Dokumente bleiben bei OCR-only.</small>
+                  </div>
+                  <div class="field">
+                    <label for="preview-vision-tag-name">Vision-Zusatz-Tag</label>
+                    <input id="preview-vision-tag-name" type="text" placeholder="KI Vision">
+                    <small>Dieser Zusatz-Tag wird beim Uebernehmen gesetzt, wenn der Vision-Schritt erfolgreich in das Ergebnis eingeflossen ist.</small>
+                  </div>
+                  <div class="field">
+                    <label for="preview-vision-tag-color">Vision-Tag-Farbe</label>
+                    <input id="preview-vision-tag-color" type="text" placeholder="#d97706">
+                    <small>Hex-Farbe fuer den Vision-Zusatz-Tag, damit Vision-unterstuetzte Dokumente in Paperless sofort erkennbar sind.</small>
+                  </div>
+                </div>
+                <div class="actions">
+                  <button id="save-preview-config">Preview & Vision speichern</button>
+                  <button id="reload-preview-config" class="secondary">Neu laden</button>
+                </div>
+                <div id="preview-config-status" class="statusline">Preview-Konfiguration noch nicht geladen.</div>
               </div>
               <div class="section">
                 <div class="section-head">
@@ -1014,6 +1093,16 @@ HTML = """<!doctype html>
     const saveAiConfigBtn = document.getElementById('save-ai-config');
     const reloadAiConfigBtn = document.getElementById('reload-ai-config');
     const aiConfigStatusEl = document.getElementById('ai-config-status');
+    const previewOcrModelEl = document.getElementById('preview-ocr-model');
+    const previewVisionModelEl = document.getElementById('preview-vision-model');
+    const previewVisionContentCharsEl = document.getElementById('preview-vision-content-chars');
+    const previewVisionTimeoutEl = document.getElementById('preview-vision-timeout');
+    const previewVisionMaxPagesEl = document.getElementById('preview-vision-max-pages');
+    const previewVisionTagNameEl = document.getElementById('preview-vision-tag-name');
+    const previewVisionTagColorEl = document.getElementById('preview-vision-tag-color');
+    const savePreviewConfigBtn = document.getElementById('save-preview-config');
+    const reloadPreviewConfigBtn = document.getElementById('reload-preview-config');
+    const previewConfigStatusEl = document.getElementById('preview-config-status');
     const promptEditorEl = document.getElementById('prompt-editor');
     const savePromptBtn = document.getElementById('save-prompt');
     const reloadPromptBtn = document.getElementById('reload-prompt');
@@ -1035,6 +1124,7 @@ HTML = """<!doctype html>
     const docDetailOcrEl = document.getElementById('doc-detail-ocr');
     const docDetailStatusEl = document.getElementById('doc-detail-status');
     const docPreviewSingleBtn = document.getElementById('doc-preview-single');
+    const docPreviewVisionEl = document.getElementById('doc-preview-vision');
     const docRunSingleBtn = document.getElementById('doc-run-single');
     const docProposalMetaEl = document.getElementById('doc-proposal-meta');
     const docProposalReasonEl = document.getElementById('doc-proposal-reason');
@@ -1051,6 +1141,8 @@ HTML = """<!doctype html>
     let documentRows = [];
     let activeDocumentId = null;
     let activeProposal = null;
+    let activePreviewJobId = null;
+    let availableModelNames = [];
 
     function addMessage(role, content) {
       messages.push({ role, content });
@@ -1089,7 +1181,11 @@ HTML = """<!doctype html>
       modelEl.innerHTML = '';
       paperlessModelEl.innerHTML = '';
       paperlessFallbackModelEl.innerHTML = '';
+      previewOcrModelEl.innerHTML = '';
+      previewVisionModelEl.innerHTML = '';
+      availableModelNames = [];
       for (const model of data.models || []) {
+        availableModelNames.push(model.name);
         const option = document.createElement('option');
         option.value = model.name;
         option.textContent = model.name;
@@ -1102,6 +1198,14 @@ HTML = """<!doctype html>
         fallbackOption.value = model.name;
         fallbackOption.textContent = model.name;
         paperlessFallbackModelEl.appendChild(fallbackOption);
+        const previewOcrOption = document.createElement('option');
+        previewOcrOption.value = model.name;
+        previewOcrOption.textContent = model.name;
+        previewOcrModelEl.appendChild(previewOcrOption);
+        const previewVisionOption = document.createElement('option');
+        previewVisionOption.value = model.name;
+        previewVisionOption.textContent = model.name;
+        previewVisionModelEl.appendChild(previewVisionOption);
       }
       if (data.paperless_model) {
         paperlessModelEl.value = data.paperless_model;
@@ -1112,6 +1216,7 @@ HTML = """<!doctype html>
       if (data.chat_model) {
         modelEl.value = data.chat_model;
       }
+      loadPreviewConfig();
     }
 
     function getBackfillMode() {
@@ -1187,6 +1292,7 @@ HTML = """<!doctype html>
     function renderDocumentDetail(doc) {
       activeDocumentId = doc.id;
       activeProposal = null;
+      activePreviewJobId = null;
       const tags = (doc.tags || []).map(tag => typeof tag === 'object' ? tag.name : tag);
       const currentCorrespondent = doc.correspondent_name || (doc.correspondent && doc.correspondent.name) || '';
       const currentDocumentType = doc.document_type_name || (doc.document_type && doc.document_type.name) || '';
@@ -1222,12 +1328,60 @@ HTML = """<!doctype html>
         <div class="meta-row"><div class="meta-label">Confidence</div><div>${formatValue(proposal.confidence)}</div></div>
         <div class="meta-row"><div class="meta-label">Modell</div><div>${formatValue(proposal._model)}</div></div>
         <div class="meta-row"><div class="meta-label">Fallback</div><div>${proposal._fallback_used ? `ja, von ${formatValue(proposal._fallback_from)}` : 'nein'}</div></div>
+        <div class="meta-row"><div class="meta-label">Hybrid</div><div>${proposal._hybrid_used ? 'ja' : 'nein'}</div></div>
+        <div class="meta-row"><div class="meta-label">OCR-Modell</div><div>${formatValue(proposal._ocr_model || proposal._model)}</div></div>
+        <div class="meta-row"><div class="meta-label">Vision-Modell</div><div>${proposal._vision_used ? formatValue(proposal._vision_model) : '-'}</div></div>
+        <div class="meta-row"><div class="meta-label">Vision</div><div>${proposal._vision_used ? `ja, ${proposal._vision_pages || 0} Seite(n)` : 'nein'}</div></div>
       `;
       docProposalReasonEl.textContent = proposal.reason || '-';
+      if (proposal._vision_error) {
+        docProposalReasonEl.textContent += `\n\nVision-Hinweis: ${proposal._vision_error}`;
+      }
       docApplyProposalBtn.disabled = false;
       docDiscardProposalBtn.disabled = false;
-      docProposalStatusEl.textContent = 'KI-Vorschlag geladen.';
-      docProposalStatusEl.className = 'statusline';
+      if (proposal._hybrid_pending) {
+        docProposalStatusEl.textContent = 'OCR-Vorschlag geladen. Vision-Review laeuft im Hintergrund...';
+        docProposalStatusEl.className = 'statusline';
+      } else {
+        docProposalStatusEl.textContent = 'KI-Vorschlag geladen.';
+        docProposalStatusEl.className = 'statusline';
+      }
+    }
+
+    async function pollPreviewJob(jobId) {
+      activePreviewJobId = jobId;
+      while (activePreviewJobId === jobId) {
+        await new Promise(resolve => window.setTimeout(resolve, 4000));
+        if (activePreviewJobId !== jobId) return;
+        try {
+          const res = await fetch(`/api/paperless/preview-jobs/${jobId}`);
+          const data = await res.json();
+          if (!res.ok) throw new Error(data.error || 'Fehler');
+          if (data.status === 'done' && data.proposal) {
+            renderProposal(data.proposal);
+            backfillLogEl.textContent = JSON.stringify(data.proposal || {}, null, 2);
+            docDetailStatusEl.textContent = `Hybrid-Vorschau fuer #${activeDocumentId} abgeschlossen.`;
+            activePreviewJobId = null;
+            return;
+          }
+          if (data.status === 'error') {
+            if (activeProposal) {
+              activeProposal._vision_error = data.error || 'Vision-Review fehlgeschlagen';
+              activeProposal._hybrid_pending = false;
+              renderProposal(activeProposal);
+            }
+            docDetailStatusEl.textContent = `Hybrid-Vorschau fuer #${activeDocumentId} beendet mit Fehler.`;
+            docDetailStatusEl.className = 'statusline warn';
+            activePreviewJobId = null;
+            return;
+          }
+        } catch (err) {
+          docProposalStatusEl.textContent = `Vision-Polling Fehler: ${err.message}`;
+          docProposalStatusEl.className = 'statusline warn';
+          activePreviewJobId = null;
+          return;
+        }
+      }
     }
 
     async function loadDocumentDetail(docId) {
@@ -1257,7 +1411,9 @@ HTML = """<!doctype html>
       docDetailStatusEl.className = 'statusline';
       try {
         const url = dryRun ? `/api/paperless/document/${activeDocumentId}/preview` : '/api/paperless/backfill';
-        const payload = dryRun ? {} : {
+        const payload = dryRun ? {
+          use_vision: docPreviewVisionEl.checked
+        } : {
           dry_run: false,
           document_ids: [activeDocumentId],
           mode: 'selected'
@@ -1272,7 +1428,12 @@ HTML = """<!doctype html>
         if (dryRun) {
           renderProposal(data.proposal || null);
           backfillLogEl.textContent = JSON.stringify(data.proposal || {}, null, 2);
-          docDetailStatusEl.textContent = `Vorschau fuer #${activeDocumentId} abgeschlossen.`;
+          if (data.preview_job && data.preview_job.id) {
+            docDetailStatusEl.textContent = `OCR-Vorschau fuer #${activeDocumentId} abgeschlossen. Vision-Review laeuft...`;
+            pollPreviewJob(data.preview_job.id);
+          } else {
+            docDetailStatusEl.textContent = `Vorschau fuer #${activeDocumentId} abgeschlossen.`;
+          }
         } else {
           backfillLogEl.textContent = data.output || 'Keine Ausgabe';
           docDetailStatusEl.textContent = `Einzellauf fuer #${activeDocumentId} abgeschlossen.`;
@@ -1428,6 +1589,60 @@ HTML = """<!doctype html>
       }
     }
 
+    async function loadPreviewConfig() {
+      previewConfigStatusEl.textContent = 'Preview-Konfiguration wird geladen...';
+      previewConfigStatusEl.className = 'statusline';
+      try {
+        const res = await fetch('/api/preview/config');
+        const data = await res.json();
+        if (!res.ok) throw new Error(data.error || 'Fehler');
+        if (data.preview_ocr_model && availableModelNames.includes(data.preview_ocr_model)) {
+          previewOcrModelEl.value = data.preview_ocr_model;
+        }
+        if (data.vision_model && availableModelNames.includes(data.vision_model)) {
+          previewVisionModelEl.value = data.vision_model;
+        }
+        previewVisionContentCharsEl.value = data.vision_content_chars || '';
+        previewVisionTimeoutEl.value = data.vision_timeout_seconds || '';
+        previewVisionMaxPagesEl.value = data.vision_max_pages || '';
+        previewVisionTagNameEl.value = data.vision_tag_name || '';
+        previewVisionTagColorEl.value = data.vision_tag_color || '';
+        previewConfigStatusEl.textContent = 'Preview-Konfiguration geladen.';
+      } catch (err) {
+        previewConfigStatusEl.textContent = `Fehler: ${err.message}`;
+        previewConfigStatusEl.className = 'statusline warn';
+      }
+    }
+
+    async function savePreviewConfig() {
+      savePreviewConfigBtn.disabled = true;
+      previewConfigStatusEl.textContent = 'Preview-Konfiguration wird gespeichert...';
+      previewConfigStatusEl.className = 'statusline';
+      try {
+        const res = await fetch('/api/preview/config', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            preview_ocr_model: previewOcrModelEl.value,
+            vision_model: previewVisionModelEl.value,
+            vision_content_chars: previewVisionContentCharsEl.value.trim(),
+            vision_timeout_seconds: previewVisionTimeoutEl.value.trim(),
+            vision_max_pages: previewVisionMaxPagesEl.value.trim(),
+            vision_tag_name: previewVisionTagNameEl.value.trim(),
+            vision_tag_color: previewVisionTagColorEl.value.trim()
+          })
+        });
+        const data = await res.json();
+        if (!res.ok) throw new Error(data.error || 'Fehler');
+        previewConfigStatusEl.textContent = 'Preview-Konfiguration gespeichert.';
+      } catch (err) {
+        previewConfigStatusEl.textContent = `Fehler: ${err.message}`;
+        previewConfigStatusEl.className = 'statusline warn';
+      } finally {
+        savePreviewConfigBtn.disabled = false;
+      }
+    }
+
     async function loadPrompt() {
       promptStatusEl.textContent = 'Prompt wird geladen...';
       promptStatusEl.className = 'statusline';
@@ -1574,6 +1789,8 @@ HTML = """<!doctype html>
     savePaperlessModelBtn.addEventListener('click', savePaperlessModel);
     saveAiConfigBtn.addEventListener('click', saveAiConfig);
     reloadAiConfigBtn.addEventListener('click', loadAiConfig);
+    savePreviewConfigBtn.addEventListener('click', savePreviewConfig);
+    reloadPreviewConfigBtn.addEventListener('click', loadPreviewConfig);
     savePromptBtn.addEventListener('click', savePrompt);
     reloadPromptBtn.addEventListener('click', loadPrompt);
     docRefreshBtn.addEventListener('click', loadDocuments);
@@ -1600,6 +1817,7 @@ HTML = """<!doctype html>
     } catch (_) {}
     syncFallbackUi();
     loadAiConfig();
+    loadPreviewConfig();
     loadPrompt();
     loadDocuments();
   </script>
@@ -1640,6 +1858,47 @@ def load_paperless_env() -> dict[str, str]:
     return env_map
 
 
+def default_preview_config() -> dict[str, str]:
+    return {
+        "preview_ocr_model": os.getenv("PAPERLESS_PREVIEW_OCR_MODEL", "qwen3.5:4b"),
+        "vision_model": os.getenv("PAPERLESS_PREVIEW_VISION_MODEL", "qwen3.5:0.8b"),
+        "vision_content_chars": os.getenv("PAPERLESS_PREVIEW_VISION_CONTENT_CHARS", "800"),
+        "vision_timeout_seconds": os.getenv("PAPERLESS_PREVIEW_VISION_TIMEOUT_SECONDS", "120"),
+        "vision_max_pages": os.getenv("PAPERLESS_PREVIEW_VISION_MAX_PAGES", "1"),
+        "vision_tag_name": os.getenv("PAPERLESS_PREVIEW_VISION_TAG_NAME", "KI Vision"),
+        "vision_tag_color": os.getenv("PAPERLESS_PREVIEW_VISION_TAG_COLOR", "#d97706"),
+    }
+
+
+def load_preview_config() -> dict[str, str]:
+    config = default_preview_config()
+    path = Path(PREVIEW_CONFIG_PATH)
+    if path.is_file():
+        try:
+            loaded = json.loads(path.read_text(encoding="utf-8"))
+        except json.JSONDecodeError as exc:
+            raise RuntimeError(f"Invalid preview config: {exc}") from exc
+        if isinstance(loaded, dict):
+            for key in config:
+                value = loaded.get(key)
+                if value is not None and str(value).strip():
+                    config[key] = str(value).strip()
+    return config
+
+
+def save_preview_config(payload: dict) -> tuple[int, dict]:
+    allowed = default_preview_config()
+    current = load_preview_config()
+    for key in allowed:
+        value = str(payload.get(key, "")).strip()
+        if value:
+            current[key] = value
+    path = Path(PREVIEW_CONFIG_PATH)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(current, indent=2, ensure_ascii=True) + "\n", encoding="utf-8")
+    return 200, {"status": "ok"}
+
+
 def read_paperless_prompt() -> tuple[int, dict]:
     prompt_path = Path("/opt/paperless/ai_enrich_prompt.txt")
     if not prompt_path.is_file():
@@ -1660,6 +1919,10 @@ def read_paperless_config() -> tuple[int, dict]:
         "http_timeout_seconds": env_map.get("PAPERLESS_AI_HTTP_TIMEOUT_SECONDS", ""),
         "default_tag_color": env_map.get("PAPERLESS_AI_DEFAULT_TAG_COLOR", ""),
     }
+
+
+def read_preview_config() -> tuple[int, dict]:
+    return 200, load_preview_config()
 
 
 def call_ai_helper(args: list[str]) -> tuple[int, dict]:
@@ -1792,6 +2055,212 @@ def fetch_paperless_document(document_id: int) -> tuple[int, dict]:
     return 200, {"document": document}
 
 
+def fetch_paperless_document_binary(document_id: int) -> tuple[bytes, str]:
+    paperless_env = load_paperless_env()
+    api_url = paperless_env.get("PAPERLESS_API_URL")
+    token = paperless_env.get("PAPERLESS_API_TOKEN")
+    if not api_url or not token:
+        raise RuntimeError("Paperless API configuration is incomplete")
+    candidates = (
+        f"/api/documents/{document_id}/download/",
+        f"/api/documents/{document_id}/original/",
+        f"/api/documents/{document_id}/file/",
+    )
+    last_error = "document binary endpoint not found"
+    for path in candidates:
+        url = f"{api_url.rstrip('/')}{path}"
+        req = urllib.request.Request(
+            url,
+            headers={"Accept": "*/*", "Authorization": f"Token {token}"},
+            method="GET",
+        )
+        try:
+            with urllib.request.urlopen(req, timeout=180) as response:
+                return response.read(), response.headers.get("Content-Type", "")
+        except urllib.error.HTTPError as exc:
+            last_error = f"{path} returned {exc.code}"
+            if exc.code == 404:
+                continue
+            body = exc.read().decode("utf-8", errors="replace")
+            raise RuntimeError(f"Downloading document {document_id} failed via {path}: {body}") from exc
+    raise RuntimeError(f"Downloading document {document_id} failed: {last_error}")
+
+
+def render_pdf_preview_images(pdf_bytes: bytes, max_pages: int = 1) -> list[str]:
+    pdftoppm = "/usr/bin/pdftoppm"
+    if not Path(pdftoppm).is_file():
+        raise RuntimeError("pdftoppm is not installed on the host")
+    with tempfile.TemporaryDirectory(prefix="paperless-ai-vision-") as tmpdir:
+        tmp_path = Path(tmpdir)
+        pdf_path = tmp_path / "document.pdf"
+        pdf_path.write_bytes(pdf_bytes)
+        output_prefix = tmp_path / "page"
+        cmd = [
+            pdftoppm,
+            "-jpeg",
+            "-f",
+            "1",
+            "-l",
+            str(max(1, max_pages)),
+            str(pdf_path),
+            str(output_prefix),
+        ]
+        result = subprocess.run(cmd, capture_output=True, text=True, check=False, timeout=180)
+        if result.returncode != 0:
+            output = ((result.stdout or "") + (result.stderr or "")).strip()
+            raise RuntimeError(output or "pdftoppm failed")
+        image_paths = sorted(tmp_path.glob("page-*.jpg"))
+        if not image_paths:
+            raise RuntimeError("pdftoppm did not produce preview images")
+        return [base64.b64encode(path.read_bytes()).decode("ascii") for path in image_paths]
+
+
+def build_vision_prompt(base_prompt: str) -> str:
+    addition = """
+
+Zusatz fuer die Analyse:
+- Nutze neben dem OCR-Inhalt auch das beigefuegte Seitenbild.
+- Wenn OCR und Seitenbild widerspruechlich wirken, bewerte den sichtbaren Dokumentaufbau, Briefkopf und klar lesbare Textelemente mit.
+- Bleibe trotz Bildanalyse streng beim JSON-Format.
+""".strip()
+    return f"{base_prompt}\n\n{addition}"
+
+
+def build_document_prompt_with_limit(module, document: dict, existing_person_tags: list[str], content_chars: int) -> str:
+    title = document.get("title") or ""
+    original = document.get("original_file_name") or ""
+    correspondent = (document.get("correspondent") or {}).get("name", "") if isinstance(document.get("correspondent"), dict) else ""
+    doc_type = (document.get("document_type") or {}).get("name", "") if isinstance(document.get("document_type"), dict) else ""
+    tags = [tag.get("name", "") for tag in document.get("tags", []) if isinstance(tag, dict)]
+    content = module.truncate_text(document.get("content") or "", content_chars)
+    template = module.load_prompt_template()
+    return template.format(
+        title=title,
+        original=original,
+        correspondent=correspondent,
+        doc_type=doc_type,
+        tags=", ".join(tags),
+        existing_person_tags=", ".join(existing_person_tags) or "-",
+        content=content,
+    )
+
+
+def build_vision_review_prompt(module, document: dict, ocr_proposal: dict, existing_person_tags: list[str], content_chars: int) -> str:
+    ocr_excerpt = module.truncate_text(document.get("content") or "", content_chars)
+    return f"""Visueller Review fuer paperless-ngx.
+Antworte nur als JSON.
+
+Behalte den OCR-Vorschlag als Standard.
+Korrigiere nur, wenn das Seitenbild klar bessere Hinweise liefert.
+Nutze das Bild vor allem fuer Absender, Dokumentart und Betreff.
+Keine neuen Personentags ausser aus dieser Liste: {", ".join(existing_person_tags) or "-"}
+
+OCR-Vorschlag:
+{json.dumps({"title": ocr_proposal.get("title", ""), "correspondent": ocr_proposal.get("correspondent", ""), "document_type": ocr_proposal.get("document_type", ""), "tags": ocr_proposal.get("tags", [])}, ensure_ascii=True)}
+
+Kurzer OCR-Auszug:
+{ocr_excerpt}
+
+Antwortformat:
+{{"title":"","correspondent":"","document_type":"","tags":[],"confidence":0.0,"reason":""}}
+"""
+
+
+def merge_hybrid_proposals(base: dict, vision: dict) -> dict:
+    merged = dict(base)
+    if vision.get("title"):
+        merged["title"] = vision["title"]
+    if vision.get("correspondent"):
+        merged["correspondent"] = vision["correspondent"]
+    if vision.get("document_type"):
+        merged["document_type"] = vision["document_type"]
+    combined_tags: list[str] = []
+    seen: set[str] = set()
+    for source in (base.get("tags", []), vision.get("tags", [])):
+        for tag in source:
+            tag_name = str(tag).strip()
+            if not tag_name:
+                continue
+            key = tag_name.casefold()
+            if key in seen:
+                continue
+            seen.add(key)
+            combined_tags.append(tag_name)
+    merged["tags"] = combined_tags[:6]
+    try:
+        base_conf = float(base.get("confidence") or 0)
+    except (TypeError, ValueError):
+        base_conf = 0.0
+    try:
+        vision_conf = float(vision.get("confidence") or 0)
+    except (TypeError, ValueError):
+        vision_conf = 0.0
+    merged["confidence"] = round(max(base_conf, vision_conf), 2)
+    base_reason = str(base.get("reason") or "").strip()
+    vision_reason = str(vision.get("reason") or "").strip()
+    reasons = []
+    if base_reason:
+        reasons.append(f"OCR: {base_reason}")
+    if vision_reason:
+        reasons.append(f"Vision: {vision_reason}")
+    merged["reason"] = "\n".join(reasons)[:200]
+    return merged
+
+
+def store_preview_job(job_id: str, payload: dict) -> None:
+    with PREVIEW_JOBS_LOCK:
+        PREVIEW_JOBS[job_id] = payload
+
+
+def read_preview_job(job_id: str) -> dict | None:
+    with PREVIEW_JOBS_LOCK:
+        return PREVIEW_JOBS.get(job_id)
+
+
+def run_hybrid_vision_review(job_id: str, document: dict, proposal: dict, existing_person_tags: list[str], preview_config: dict[str, str]) -> None:
+    try:
+        module = load_ai_hook_module()
+        paperless_env = load_paperless_env()
+        for key, value in paperless_env.items():
+            os.environ[key] = value
+        document_id = int(document.get("id"))
+        pdf_bytes, content_type = fetch_paperless_document_binary(document_id)
+        if not pdf_bytes:
+            raise RuntimeError("downloaded file was empty")
+        if content_type and "pdf" not in content_type.lower():
+            raise RuntimeError(f"unexpected content type for PDF preview: {content_type or '-'}")
+        image_payloads = render_pdf_preview_images(pdf_bytes, max_pages=1)
+        review_prompt = build_vision_review_prompt(
+            module,
+            document,
+            proposal,
+            existing_person_tags,
+            int(preview_config.get("vision_content_chars", "800")),
+        )
+        vision_raw, vision_meta = get_preview_response_details(
+            module,
+            review_prompt,
+            image_payloads=image_payloads,
+            model=preview_config.get("vision_model", "qwen3.5:0.8b"),
+            timeout=float(preview_config.get("vision_timeout_seconds", "120")),
+        )
+        vision_proposal = module.sanitize_result(vision_raw)
+        merged = merge_hybrid_proposals(proposal, vision_proposal)
+        merged["_model"] = proposal.get("_model", "")
+        merged["_ocr_model"] = proposal.get("_ocr_model", proposal.get("_model", ""))
+        merged["_fallback_used"] = bool(proposal.get("_fallback_used"))
+        merged["_fallback_from"] = proposal.get("_fallback_from", "")
+        merged["_vision_used"] = True
+        merged["_vision_pages"] = len(image_payloads)
+        merged["_vision_model"] = vision_meta.get("model", preview_config.get("vision_model", "qwen3.5:0.8b"))
+        merged["_vision_error"] = ""
+        merged["_hybrid_used"] = True
+        merged["_hybrid_pending"] = False
+        store_preview_job(job_id, {"status": "done", "proposal": merged, "updated_at": time.time()})
+    except Exception as exc:
+        store_preview_job(job_id, {"status": "error", "error": str(exc), "updated_at": time.time()})
+
+
 def load_ai_hook_module():
     hook_path = "/opt/paperless/ai_enrich.py"
     spec = importlib.util.spec_from_file_location("paperless_ai_hook", hook_path)
@@ -1802,9 +2271,86 @@ def load_ai_hook_module():
     return module
 
 
-def build_ai_preview(document_id: int) -> tuple[int, dict]:
+def call_ollama_preview(module, prompt: str, image_payloads: list[str] | None, model: str, timeout: float) -> dict:
+    host = module.env("PAPERLESS_AI_OLLAMA_URL", "http://127.0.0.1:11434")
+    client = module.HttpClient(host)
+    user_message: dict[str, object] = {"role": "user", "content": prompt}
+    if image_payloads:
+        user_message["images"] = image_payloads
+    payload: dict[str, object] = {
+        "model": model,
+        "stream": False,
+        "format": "json",
+        "messages": [
+            {"role": "system", "content": "Du gibst ausschliesslich valides JSON aus."},
+            user_message,
+        ],
+    }
+    if model.startswith("qwen3.5:"):
+        think_enabled = module.env("PAPERLESS_AI_QWEN35_THINK", "false").lower() in ("1", "true", "yes", "on")
+        payload["think"] = think_enabled
+    response = client.post("/api/chat", payload, timeout=timeout)
+    if not isinstance(response, dict):
+        raise RuntimeError("Unexpected Ollama response")
+    message = response.get("message", {})
+    content = message.get("content")
+    if not content:
+        raise RuntimeError("Ollama response did not contain message.content")
+    return module.parse_json_object(content)
+
+
+def get_preview_response_details(module, prompt: str, image_payloads: list[str] | None = None, model: str | None = None, timeout: float | None = None) -> tuple[dict, dict]:
+    if not image_payloads:
+        if model is None and timeout is None:
+            return module.get_provider_response_details(prompt)
+        provider = module.env("PAPERLESS_AI_PROVIDER", "ollama").lower()
+        if provider != "ollama":
+            return module.get_provider_response_details(prompt)
+        primary_model = model or module.env("PAPERLESS_AI_OLLAMA_MODEL", "qwen2.5:7b-instruct")
+        primary_timeout = timeout if timeout is not None else float(module.env("PAPERLESS_AI_HTTP_TIMEOUT_SECONDS", "300"))
+        return call_ollama_preview(module, prompt, None, primary_model, primary_timeout), {
+            "provider": "ollama",
+            "model": primary_model,
+            "fallback_used": False,
+            "timeout_seconds": primary_timeout,
+        }
+    provider = module.env("PAPERLESS_AI_PROVIDER", "ollama").lower()
+    if provider != "ollama":
+        response, meta = module.get_provider_response_details(prompt)
+        meta["vision_error"] = f"Vision preview is only implemented for Ollama, active provider is {provider}"
+        return response, meta
+    primary_model = model or module.env("PAPERLESS_AI_OLLAMA_MODEL", "qwen2.5:7b-instruct")
+    primary_timeout = timeout if timeout is not None else float(module.env("PAPERLESS_AI_HTTP_TIMEOUT_SECONDS", "300"))
+    fallback_enabled = module.env("PAPERLESS_AI_FALLBACK_ENABLED", "false").lower() in ("1", "true", "yes", "on")
+    fallback_model = module.env("PAPERLESS_AI_FALLBACK_MODEL", "qwen2.5:3b-instruct")
+    fallback_timeout = float(module.env("PAPERLESS_AI_FALLBACK_HTTP_TIMEOUT_SECONDS", str(primary_timeout)))
+    fallback_timeout_only = module.env("PAPERLESS_AI_FALLBACK_ON_TIMEOUT_ONLY", "true").lower() in ("1", "true", "yes", "on")
+    try:
+        return call_ollama_preview(module, prompt, image_payloads, primary_model, primary_timeout), {
+            "provider": "ollama",
+            "model": primary_model,
+            "fallback_used": False,
+            "timeout_seconds": primary_timeout,
+        }
+    except Exception as exc:
+        if not fallback_enabled:
+            raise
+        if fallback_timeout_only and not module.is_timeout_error(exc):
+            raise
+        module.warn(f"Primary preview model '{primary_model}' failed, using fallback '{fallback_model}': {exc}")
+        return call_ollama_preview(module, prompt, image_payloads, fallback_model, fallback_timeout), {
+            "provider": "ollama",
+            "model": fallback_model,
+            "fallback_used": True,
+            "fallback_from": primary_model,
+            "timeout_seconds": fallback_timeout,
+        }
+
+
+def build_ai_preview(document_id: int, use_vision: bool = False) -> tuple[int, dict]:
     module = load_ai_hook_module()
     paperless_env = load_paperless_env()
+    preview_config = load_preview_config()
     api_url = paperless_env.get("PAPERLESS_API_URL")
     token = paperless_env.get("PAPERLESS_API_TOKEN")
     if not api_url or not token:
@@ -1823,18 +2369,50 @@ def build_ai_preview(document_id: int) -> tuple[int, dict]:
     ]
     prompt = module.prompt_for_document(document, sorted(existing_person_tags, key=str.casefold))
     started = time.time()
-    raw_result, response_meta = module.get_provider_response_details(prompt)
+    preview_ocr_model = preview_config.get("preview_ocr_model", "") or None
+    raw_result, response_meta = get_preview_response_details(module, prompt, model=preview_ocr_model)
     proposal = module.sanitize_result(raw_result)
     proposal["_model"] = response_meta.get("model", "")
+    proposal["_ocr_model"] = response_meta.get("model", "")
     proposal["_fallback_used"] = bool(response_meta.get("fallback_used"))
     proposal["_fallback_from"] = response_meta.get("fallback_from", "")
+    proposal["_vision_used"] = False
+    proposal["_vision_pages"] = 0
+    proposal["_vision_error"] = ""
+    proposal["_hybrid_used"] = False
+    proposal["_vision_model"] = ""
+    proposal["_hybrid_pending"] = False
+    preview_job = None
+    if use_vision:
+        original_name = str(document.get("original_file_name") or "").lower()
+        if original_name.endswith(".pdf"):
+            page_count = int(document.get("page_count") or 0)
+            vision_max_pages = int(preview_config.get("vision_max_pages", "1"))
+            if page_count and page_count > vision_max_pages:
+                proposal["_vision_error"] = (
+                    f"Vision-Review uebersprungen: {page_count} Seiten, Limit ist {vision_max_pages}"
+                )
+            else:
+                preview_job_id = uuid.uuid4().hex
+                proposal["_hybrid_pending"] = True
+                preview_job = {"id": preview_job_id, "status": "pending"}
+                store_preview_job(preview_job_id, {"status": "pending", "document_id": document_id, "created_at": time.time()})
+                worker = threading.Thread(
+                    target=run_hybrid_vision_review,
+                    args=(preview_job_id, document, proposal.copy(), sorted(existing_person_tags, key=str.casefold), preview_config),
+                    daemon=True,
+                )
+                worker.start()
+        else:
+            proposal["_vision_error"] = "Vision preview is currently only enabled for PDF documents"
     duration = round(time.time() - started, 2)
-    return 200, {"proposal": proposal, "duration_s": duration}
+    return 200, {"proposal": proposal, "duration_s": duration, "preview_job": preview_job}
 
 
 def apply_ai_preview(document_id: int, proposal: dict) -> tuple[int, dict]:
     module = load_ai_hook_module()
     paperless_env = load_paperless_env()
+    preview_config = load_preview_config()
     api_url = paperless_env.get("PAPERLESS_API_URL")
     token = paperless_env.get("PAPERLESS_API_TOKEN")
     if not api_url or not token:
@@ -1869,6 +2447,15 @@ def apply_ai_preview(document_id: int, proposal: dict) -> tuple[int, dict]:
     for tag_id in module.resolve_tag_ids(client, result["tags"], document.get("content") or ""):
         if tag_id not in combined_tag_ids:
             combined_tag_ids.append(tag_id)
+    if proposal.get("_vision_used"):
+        vision_tag_id = module.ensure_named_object(
+            client,
+            "/api/tags/",
+            preview_config.get("vision_tag_name", "KI Vision"),
+            {"color": preview_config.get("vision_tag_color", "#d97706")},
+        )
+        if vision_tag_id is not None and vision_tag_id not in combined_tag_ids:
+            combined_tag_ids.append(vision_tag_id)
     if combined_tag_ids != current_tag_ids:
         payload["tags"] = combined_tag_ids
     if payload:
@@ -1966,6 +2553,14 @@ class Handler(BaseHTTPRequestHandler):
         if self.path == "/" or self.path == "/index.html":
             self._send(200, HTML.encode("utf-8"), "text/html; charset=utf-8")
             return
+        if self.path.startswith("/api/paperless/preview-jobs/"):
+            job_id = self.path.rsplit("/", 1)[-1]
+            payload = read_preview_job(job_id)
+            if payload is None:
+                self._send(404, json.dumps({"error": "Preview job not found"}).encode("utf-8"), "application/json")
+                return
+            self._send(200, json.dumps(payload).encode("utf-8"), "application/json")
+            return
         if self.path.startswith("/api/paperless/document/"):
             try:
                 document_id = int(self.path.rsplit("/", 1)[-1])
@@ -1980,6 +2575,13 @@ class Handler(BaseHTTPRequestHandler):
         if self.path == "/api/paperless/config":
             try:
                 status, payload = read_paperless_config()
+            except Exception as exc:
+                status, payload = 500, {"error": str(exc)}
+            self._send(status, json.dumps(payload).encode("utf-8"), "application/json")
+            return
+        if self.path == "/api/preview/config":
+            try:
+                status, payload = read_preview_config()
             except Exception as exc:
                 status, payload = 500, {"error": str(exc)}
             self._send(status, json.dumps(payload).encode("utf-8"), "application/json")
@@ -2025,11 +2627,14 @@ class Handler(BaseHTTPRequestHandler):
     def do_POST(self) -> None:
         if self.path.startswith("/api/paperless/document/") and self.path.endswith("/preview"):
             length = int(self.headers.get("Content-Length", "0"))
+            payload = {}
             if length:
-                self.rfile.read(length)
+                raw = self.rfile.read(length)
+                if raw:
+                    payload = json.loads(raw.decode("utf-8"))
             try:
                 document_id = int(self.path.split("/")[-2])
-                status, response = build_ai_preview(document_id)
+                status, response = build_ai_preview(document_id, bool(payload.get("use_vision")))
             except Exception as exc:
                 status, response = 500, {"error": str(exc)}
             self._send(status, json.dumps(response).encode("utf-8"), "application/json")
@@ -2045,7 +2650,7 @@ class Handler(BaseHTTPRequestHandler):
                 status, response = 500, {"error": str(exc)}
             self._send(status, json.dumps(response).encode("utf-8"), "application/json")
             return
-        if self.path not in ("/api/chat", "/api/paperless/backfill", "/api/paperless/model", "/api/paperless/config", "/api/paperless/prompt"):
+        if self.path not in ("/api/chat", "/api/paperless/backfill", "/api/paperless/model", "/api/paperless/config", "/api/preview/config", "/api/paperless/prompt"):
             self._send(404, b"Not found", "text/plain; charset=utf-8")
             return
         length = int(self.headers.get("Content-Length", "0"))
@@ -2066,6 +2671,11 @@ class Handler(BaseHTTPRequestHandler):
         elif self.path == "/api/paperless/config":
             try:
                 status, response = save_paperless_config(payload)
+            except Exception as exc:
+                status, response = 500, {"error": str(exc)}
+        elif self.path == "/api/preview/config":
+            try:
+                status, response = save_preview_config(payload)
             except Exception as exc:
                 status, response = 500, {"error": str(exc)}
         elif self.path == "/api/paperless/prompt":

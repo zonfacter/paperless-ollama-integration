@@ -1,5 +1,28 @@
 # Changelog
 
+## 2026-03-28
+
+### Hybrid Review, Preview Controls, And UX Clarification
+
+- Port-`3000`-Review von rein synchroner Vorschau auf asynchronen Hybrid-Workflow weiterentwickelt
+- OCR-Vorschlag und Vision-Nachpruefung logisch getrennt
+- Vision-Review als Hintergrundjob mit Polling-Endpunkt fuer die UI umgesetzt
+- neuer API-Endpunkt fuer Preview-Jobs hinzugefuegt
+- neue `Preview & Vision`-Konfiguration in der Weboberflaeche eingefuehrt
+- getrennte Steuerung fuer:
+  - Vorschau-OCR-Modell
+  - Vision-Modell
+  - Vision-OCR-Zeichen
+  - Vision-Timeout
+  - Vision-Seitenlimit
+  - Vision-Zusatz-Tag und Tag-Farbe
+- Vorschau-Regeln aus hart codierten Defaults in eine eigene Webserver-Konfiguration ausgelagert
+- Vision bewusst auf kurze PDFs begrenzt, damit laengere Dokumente nicht unnoetig den Review-Flow blockieren
+- erfolgreicher Vision-Review kann beim Uebernehmen einen farbigen Zusatz-Tag in Paperless setzen
+- UI um erklaerende Hilfetexte fuer Modellstrategie, Paperless-KI-Konfiguration und Preview/Vision erweitert
+- Review-Workspace zeigt jetzt getrennt OCR-Modell, Vision-Modell und Hybrid-Status
+- Dokumentation fuer Web-UI, UI-Notizen und Readme-Dateien auf den neuen Hybrid-/Preview-Stand gebracht
+
 ## 2026-03-27
 
 ### Review Workspace And Qwen 3.5 Hardening

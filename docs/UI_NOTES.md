@@ -50,7 +50,16 @@ Funktional, aber nicht dominant.
 - Fallback
 - Timeout
 - OCR-Zeichen
+- Preview- und Vision-Regeln
 - Prompt
+
+Die Steuerung soll auch ohne Vorwissen verstaendlich bleiben:
+
+- kurze Hilfetexte direkt unter den Feldern
+- klare Trennung zwischen:
+  - produktivem Paperless-Import
+  - Vorschau auf Port `3000`
+- keine versteckten Betriebsregeln nur im Code
 
 ### Chat
 
@@ -79,3 +88,4 @@ Sinnvoll:
 - klare Karten statt schwerer Panels
 - moderne Abstaende und Radien, aber keine verspielte UI
 - Status und Aktionen muessen schnell auffindbar sein
+- Konfiguration muss selbsterklaerend sein, nicht nur technisch korrekt

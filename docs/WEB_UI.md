@@ -6,6 +6,7 @@ Die Weboberflaeche auf Port `3000` ist keine reine Chat-Seite mehr, sondern eine
 
 - Chat mit installierten `Ollama`-Modellen
 - Paperless-Modellstrategie
+- getrennte Preview- und Vision-Konfiguration
 - Prompt-Bearbeitung
 - Review einzelner Dokumente
 - Backfill fuer Bestandsdokumente
@@ -38,6 +39,9 @@ Funktionen:
 - Timeout setzen
 - OCR-Zeichen setzen
 - Mindest-Confidence setzen
+- getrenntes Vorschau-OCR-Modell setzen
+- eigenes Vision-Modell fuer die Review-Vorschau setzen
+- Vision-Seitenlimit, Vision-Timeout und Vision-Tag konfigurieren
 - Prompt laden, aendern und speichern
 
 ### Chat
@@ -73,8 +77,10 @@ Der Layout-Modus wird im Browser gespeichert. Dadurch kann derselbe Host auf gro
 2. Dokument anklicken
 3. OCR und aktuelle Metadaten ansehen
 4. `Nur dieses Dokument Vorschau`
-5. Vorschlag pruefen
-6. `Vorschlag uebernehmen`
+5. optional `Hybrid OCR + Vision` aktivieren
+6. OCR-Vorschlag pruefen
+7. auf Hintergrund-Review warten, wenn Vision aktiv ist
+8. `Vorschlag uebernehmen`
 
 ### Bestandsdokumente nachziehen
 
@@ -93,3 +99,27 @@ Der Layout-Modus wird im Browser gespeichert. Dadurch kann derselbe Host auf gro
   - der Paperless-API
   - dem lokalen `Ollama`
   - den Helper-Skripten
+
+## Hybrid Review
+
+Die Dokumentvorschau kann OCR und Vision kombiniert nutzen, ohne den normalen Paperless-Hook zu veraendern.
+
+Ablauf:
+
+- OCR-Vorschlag zuerst
+  - die Vorschau erzeugt zuerst mit dem konfigurierten `Vorschau-OCR-Modell` einen schnellen Entwurf
+- Vision-Review danach
+  - bei kurzen PDFs kann optional ein zweiter Hintergrundlauf mit einem kleineren Vision-Modell starten
+- Hintergrundjob statt Vollblockade
+  - die UI zeigt sofort den OCR-Vorschlag und pollt den Vision-Review nach
+- bewusst begrenzte Vision
+  - ueber `Vision nur bis Seitenzahl` werden laengere Dokumente automatisch bei OCR-only belassen
+
+## Sichtbarkeit In Paperless
+
+Wenn ein Vorschlag mit erfolgreicher Vision-Nachpruefung uebernommen wird, kann die UI zusaetzlich einen eigenen Tag setzen:
+
+- Standardname: `KI Vision`
+- Standardfarbe: `#d97706`
+
+Dadurch bleiben vision-unterstuetzte Dokumente in `paperless-ngx` spaeter sichtbar filterbar.

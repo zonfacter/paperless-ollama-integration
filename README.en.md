@@ -45,6 +45,7 @@ The current state of this project reflects a working setup with the following bu
   - document type
   - tags
 - review and control UI on port `3000`
+- separate preview/vision rules for the review UI
 
 ## Project Contents
 
@@ -57,6 +58,7 @@ The current state of this project reflects a working setup with the following bu
   - local web console for:
     - chat with local models
     - Paperless configuration
+    - dedicated preview and vision configuration for document review
     - prompt editing
     - single-document review
     - backfill for existing documents
@@ -124,6 +126,7 @@ The installer:
   - search documents
   - inspect OCR and current metadata
   - generate an AI preview
+  - optionally use hybrid `OCR + Vision` for short PDFs
   - apply or discard the proposal
 - Port `3000` provides `Backfill` for existing documents:
   - only documents with missing metadata
@@ -146,6 +149,8 @@ The installer:
 - protection against hallucinated person tags
 - `Qwen 3.5` support with thinking disabled by default
 - review workflow before writing metadata for single documents
+- asynchronous hybrid preview with OCR first and optional vision follow-up
+- separate web configuration for preview OCR model, vision model, page limit, and vision tagging
 
 ## Documentation
 
