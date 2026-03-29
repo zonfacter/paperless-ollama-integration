@@ -31,6 +31,9 @@ PADDLEOCR_API_INSTALL_SCRIPT = os.getenv(
 )
 PREVIEW_JOBS: dict[str, dict] = {}
 PREVIEW_JOBS_LOCK = threading.Lock()
+BACKFILL_JOBS: dict[str, dict] = {}
+BACKFILL_JOBS_LOCK = threading.Lock()
+BACKFILL_LATEST_JOB_ID: str | None = None
 
 
 HTML = """<!doctype html>
@@ -901,8 +904,15 @@ HTML = """<!doctype html>
                 </div>
                 <div class="actions">
                   <button id="backfill-preview" class="secondary">Vorschau</button>
+                  <button id="backfill-clear-review" class="secondary">Hellblaue Review-Tags entfernen</button>
                   <button id="backfill-run">Backfill starten</button>
+                  <button id="backfill-refresh-job" class="secondary">Job-Status aktualisieren</button>
                 </div>
+                <label class="check">
+                  <input id="backfill-clear-review-first" type="checkbox">
+                  Vor dem Start hellblaue Review-Tags entfernen
+                  <small>Empfohlen fuer einen kompletten Neuaufbau. Der Lauf startet danach im Hintergrund und kann spaeter weiter verfolgt werden.</small>
+                </label>
                 <div id="backfill-status" class="statusline">Noch kein Lauf gestartet.</div>
                 <div id="backfill-log" class="logbox">Bereit.</div>
               </div>
@@ -1232,7 +1242,10 @@ HTML = """<!doctype html>
     const backfillQueryEl = document.getElementById('backfill-query');
     const backfillFromIdEl = document.getElementById('backfill-from-id');
     const backfillPreviewBtn = document.getElementById('backfill-preview');
+    const backfillClearReviewBtn = document.getElementById('backfill-clear-review');
     const backfillRunBtn = document.getElementById('backfill-run');
+    const backfillRefreshJobBtn = document.getElementById('backfill-refresh-job');
+    const backfillClearReviewFirstEl = document.getElementById('backfill-clear-review-first');
     const backfillStatusEl = document.getElementById('backfill-status');
     const backfillLogEl = document.getElementById('backfill-log');
     const docSearchEl = document.getElementById('doc-search');
@@ -1266,6 +1279,7 @@ HTML = """<!doctype html>
     let activeDocumentId = null;
     let activeProposal = null;
     let activePreviewJobId = null;
+    let activeBackfillJobId = null;
     let availableModelNames = [];
     const cfgTagColorControl = bindColorInput(cfgTagColorEl, cfgTagColorPickerEl, '#4f6bed');
     const cfgReviewTagColorControl = bindColorInput(cfgReviewTagColorEl, cfgReviewTagColorPickerEl, '#7dd3fc');
@@ -1960,8 +1974,125 @@ HTML = """<!doctype html>
         from_id: Number(backfillFromIdEl.value || 0),
         only_missing_metadata: mode === 'missing',
         document_ids: mode === 'selected' ? Array.from(selectedDocumentIds) : [],
+        clear_review_tags_first: !dryRun && !!backfillClearReviewFirstEl.checked,
         mode
       };
+    }
+
+    function setBackfillJobState(jobId) {
+      activeBackfillJobId = jobId || null;
+      try {
+        if (activeBackfillJobId) {
+          localStorage.setItem('paperless-backfill-job-id', activeBackfillJobId);
+        } else {
+          localStorage.removeItem('paperless-backfill-job-id');
+        }
+      } catch (_) {}
+    }
+
+    function renderBackfillJob(job) {
+      if (!job) {
+        backfillStatusEl.textContent = 'Noch kein Hintergrund-Job bekannt.';
+        backfillStatusEl.className = 'statusline';
+        backfillLogEl.textContent = 'Bereit.';
+        return;
+      }
+      const prefix = job.document_count ? `${job.document_count} Dokumente` : 'Backfill-Job';
+      if (job.status === 'running') {
+        backfillStatusEl.textContent = `${prefix}: Hintergrundlauf aktiv (${job.id}).`;
+        backfillStatusEl.className = 'statusline';
+      } else if (job.status === 'done') {
+        backfillStatusEl.textContent = `${prefix}: abgeschlossen (${job.id}).`;
+        backfillStatusEl.className = 'statusline';
+      } else if (job.status === 'error') {
+        backfillStatusEl.textContent = `${prefix}: Fehler (${job.id}).`;
+        backfillStatusEl.className = 'statusline warn';
+      } else {
+        backfillStatusEl.textContent = `${prefix}: ${job.status || 'unbekannt'} (${job.id}).`;
+        backfillStatusEl.className = 'statusline';
+      }
+      const lines = [];
+      lines.push(`Job-ID: ${job.id}`);
+      if (job.started_at) lines.push(`Gestartet: ${job.started_at}`);
+      if (job.finished_at) lines.push(`Beendet: ${job.finished_at}`);
+      if (job.returncode !== undefined && job.returncode !== null) lines.push(`Returncode: ${job.returncode}`);
+      if (job.log_path) lines.push(`Log: ${job.log_path}`);
+      if (job.review_tag_name) lines.push(`Review-Tag: ${job.review_tag_name}`);
+      if (job.clear_summary) lines.push(`Vorbereitung: ${job.clear_summary}`);
+      if (job.tail) {
+        lines.push('');
+        lines.push(job.tail);
+      }
+      backfillLogEl.textContent = lines.join('\n');
+    }
+
+    async function loadBackfillJobStatus(jobId) {
+      const cleanJobId = jobId || activeBackfillJobId;
+      if (!cleanJobId) {
+        renderBackfillJob(null);
+        return;
+      }
+      try {
+        const res = await fetch(`/api/paperless/backfill-jobs/${cleanJobId}`);
+        const data = await res.json();
+        if (!res.ok) throw new Error(data.error || 'Fehler');
+        setBackfillJobState(data.id || cleanJobId);
+        renderBackfillJob(data);
+      } catch (err) {
+        backfillStatusEl.textContent = `Fehler beim Laden des Job-Status: ${err.message}`;
+        backfillStatusEl.className = 'statusline warn';
+      }
+    }
+
+    async function loadLatestBackfillJobStatus() {
+      try {
+        const res = await fetch('/api/paperless/backfill-jobs/latest');
+        const data = await res.json();
+        if (!res.ok) throw new Error(data.error || 'Fehler');
+        if (!data.id) {
+          renderBackfillJob(null);
+          return;
+        }
+        setBackfillJobState(data.id);
+        renderBackfillJob(data);
+      } catch (_) {
+        try {
+          const storedJobId = localStorage.getItem('paperless-backfill-job-id');
+          if (storedJobId) {
+            await loadBackfillJobStatus(storedJobId);
+          }
+        } catch (_) {}
+      }
+    }
+
+    async function clearReviewTags() {
+      if (!window.confirm('Die Zuordnung des hellblauen Review-Tags wird jetzt auf allen Dokumenten entfernt. Fortfahren?')) {
+        backfillStatusEl.textContent = 'Review-Tag-Bereinigung abgebrochen.';
+        return;
+      }
+      backfillClearReviewBtn.disabled = true;
+      backfillStatusEl.textContent = 'Review-Tags werden entfernt...';
+      backfillStatusEl.className = 'statusline';
+      try {
+        const res = await fetch('/api/paperless/review-tags/clear', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({})
+        });
+        const data = await res.json();
+        if (!res.ok) throw new Error(data.error || 'Fehler');
+        backfillStatusEl.textContent = `Review-Tag entfernt von ${data.updated_documents || 0} Dokumenten.`;
+        backfillLogEl.textContent = [
+          `Review-Tag: ${data.tag_name || '-'}`,
+          `Betroffene Dokumente: ${data.updated_documents || 0}`,
+          data.deleted_tag ? 'Tag-Objekt geloescht: ja' : 'Tag-Objekt geloescht: nein'
+        ].join('\n');
+      } catch (err) {
+        backfillStatusEl.textContent = `Fehler beim Entfernen der Review-Tags: ${err.message}`;
+        backfillStatusEl.className = 'statusline warn';
+      } finally {
+        backfillClearReviewBtn.disabled = false;
+      }
     }
 
     async function runBackfill(dryRun) {
@@ -1976,11 +2107,12 @@ HTML = """<!doctype html>
         const limit = Number(backfillLimitEl.value || 0);
         const query = backfillQueryEl.value.trim();
         const warning = [
-          'Der echte Backfill startet jetzt die KI-Nachbearbeitung fuer vorhandene Paperless-Dokumente.',
+          'Der echte Backfill startet jetzt die KI-Nachbearbeitung fuer vorhandene Paperless-Dokumente im Hintergrund.',
           mode === 'missing' ? 'Modus: nur fehlende Metadaten' : mode === 'all' ? 'Modus: alle gefundenen Dokumente' : `Modus: nur Auswahl (${selectedCount})`,
           limit > 0 ? `Limit: ${limit}` : 'Limit: unbegrenzt',
           query ? `Query: ${query}` : 'Query: keine',
-          mode === 'selected' ? `Ausgewaehlte Dokumente: ${selectedCount}` : 'Ausgewaehlte Dokumente: keine feste Auswahl'
+          mode === 'selected' ? `Ausgewaehlte Dokumente: ${selectedCount}` : 'Ausgewaehlte Dokumente: keine feste Auswahl',
+          backfillClearReviewFirstEl.checked ? 'Vorbereitung: hellblaue Review-Tags werden zuerst entfernt' : 'Vorbereitung: keine Tag-Bereinigung'
         ].join('\\n');
         if (!window.confirm(warning + '\\n\\nFortfahren?')) {
           backfillStatusEl.textContent = 'Start abgebrochen.';
@@ -1988,7 +2120,9 @@ HTML = """<!doctype html>
         }
       }
       backfillPreviewBtn.disabled = true;
+      backfillClearReviewBtn.disabled = true;
       backfillRunBtn.disabled = true;
+      backfillRefreshJobBtn.disabled = true;
       backfillStatusEl.textContent = dryRun ? 'Vorschau laeuft...' : 'Backfill laeuft...';
       backfillStatusEl.className = 'statusline';
       backfillLogEl.textContent = dryRun ? 'Vorschau laeuft...' : 'Backfill laeuft...';
@@ -2000,15 +2134,23 @@ HTML = """<!doctype html>
         });
         const data = await res.json();
         if (!res.ok) throw new Error(data.error || 'Fehler');
-        backfillLogEl.textContent = data.output || 'Keine Ausgabe';
-        backfillStatusEl.textContent = dryRun ? 'Vorschau abgeschlossen.' : 'Backfill abgeschlossen.';
+        if (dryRun) {
+          backfillLogEl.textContent = data.output || 'Keine Ausgabe';
+          backfillStatusEl.textContent = 'Vorschau abgeschlossen.';
+        } else {
+          setBackfillJobState(data.job?.id || null);
+          renderBackfillJob(data.job || null);
+          backfillStatusEl.textContent = `Backfill im Hintergrund gestartet (${data.job?.id || '-'})`;
+        }
       } catch (err) {
         backfillLogEl.textContent = `Fehler: ${err.message}`;
         backfillStatusEl.textContent = 'Fehler beim Backfill.';
         backfillStatusEl.className = 'statusline warn';
       } finally {
         backfillPreviewBtn.disabled = false;
+        backfillClearReviewBtn.disabled = false;
         backfillRunBtn.disabled = false;
+        backfillRefreshJobBtn.disabled = false;
       }
     }
 
@@ -2048,7 +2190,9 @@ HTML = """<!doctype html>
       if (e.key === 'Enter') loadDocuments();
     });
     backfillPreviewBtn.addEventListener('click', () => runBackfill(true));
+    backfillClearReviewBtn.addEventListener('click', clearReviewTags);
     backfillRunBtn.addEventListener('click', () => runBackfill(false));
+    backfillRefreshJobBtn.addEventListener('click', () => loadBackfillJobStatus());
 
     loadModels().catch(() => {
       statusEl.textContent = 'Modelle konnten nicht geladen werden.';
@@ -2062,6 +2206,7 @@ HTML = """<!doctype html>
     loadPreviewConfig();
     loadPrompt();
     loadDocuments();
+    loadLatestBackfillJobStatus();
   </script>
 </body>
 </html>
@@ -3580,6 +3725,237 @@ def run_paperless_backfill(payload: dict) -> tuple[int, dict]:
     return status, {"output": output.strip(), "returncode": result.returncode}
 
 
+def _paperless_api_request(path: str, method: str = "GET", payload: dict | None = None, timeout: int = 120) -> dict:
+    env_map = load_paperless_env()
+    api_url = env_map.get("PAPERLESS_API_URL")
+    token = env_map.get("PAPERLESS_API_TOKEN")
+    if not api_url or not token:
+        raise RuntimeError("Paperless API configuration is incomplete")
+    data = None
+    headers = {"Accept": "application/json", "Authorization": f"Token {token}"}
+    if payload is not None:
+        data = json.dumps(payload).encode("utf-8")
+        headers["Content-Type"] = "application/json"
+    req = urllib.request.Request(
+        f"{api_url.rstrip('/')}{path}",
+        headers=headers,
+        data=data,
+        method=method,
+    )
+    with urllib.request.urlopen(req, timeout=timeout) as response:
+        raw = response.read().decode("utf-8") if response.length != 0 else ""
+        return json.loads(raw) if raw else {}
+
+
+def list_all_paperless_documents(page_size: int = 100) -> list[dict]:
+    documents: list[dict] = []
+    next_url = f"/api/documents/?page_size={max(1, min(page_size, 200))}&ordering=id"
+    while next_url:
+        payload = _paperless_api_request(next_url, timeout=180)
+        for item in payload.get("results", []):
+            if isinstance(item, dict):
+                documents.append(item)
+        absolute_next = payload.get("next")
+        if absolute_next:
+            parsed = urllib.parse.urlparse(str(absolute_next))
+            next_url = parsed.path + (f"?{parsed.query}" if parsed.query else "")
+        else:
+            next_url = ""
+    return documents
+
+
+def clear_review_tag_assignments() -> tuple[int, dict]:
+    paperless_env = load_paperless_env()
+    review_tag_name = paperless_env.get("PAPERLESS_AI_REVIEW_TAG_NAME", "KI Nachpruefen")
+    tags_payload = _paperless_api_request("/api/tags/?page_size=200", timeout=120)
+    review_tag = None
+    for item in tags_payload.get("results", []):
+        if isinstance(item, dict) and str(item.get("name", "")) == review_tag_name:
+            review_tag = item
+            break
+    if not review_tag:
+        return 200, {"tag_name": review_tag_name, "updated_documents": 0, "deleted_tag": False}
+    review_tag_id = int(review_tag.get("id"))
+    documents = list_all_paperless_documents()
+    updated = 0
+    for item in documents:
+        tags = item.get("tags") or []
+        current_ids = [int(tag["id"]) for tag in tags if isinstance(tag, dict) and tag.get("id") is not None]
+        if review_tag_id not in current_ids:
+            continue
+        new_ids = [tag_id for tag_id in current_ids if tag_id != review_tag_id]
+        _paperless_api_request(f"/api/documents/{int(item['id'])}/", method="PATCH", payload={"tags": new_ids}, timeout=180)
+        updated += 1
+    try:
+        _paperless_api_request(f"/api/tags/{review_tag_id}/", method="DELETE", timeout=120)
+        deleted_tag = True
+    except Exception:
+        deleted_tag = False
+    return 200, {"tag_name": review_tag_name, "updated_documents": updated, "deleted_tag": deleted_tag}
+
+
+def store_backfill_job(job_id: str, payload: dict) -> None:
+    global BACKFILL_LATEST_JOB_ID
+    with BACKFILL_JOBS_LOCK:
+        BACKFILL_JOBS[job_id] = payload
+        BACKFILL_LATEST_JOB_ID = job_id
+
+
+def read_backfill_job(job_id: str) -> dict | None:
+    with BACKFILL_JOBS_LOCK:
+        return BACKFILL_JOBS.get(job_id)
+
+
+def read_latest_backfill_job() -> dict | None:
+    with BACKFILL_JOBS_LOCK:
+        if not BACKFILL_LATEST_JOB_ID:
+            return None
+        return BACKFILL_JOBS.get(BACKFILL_LATEST_JOB_ID)
+
+
+def _tail_text_file(path: str, max_chars: int = 12000) -> str:
+    try:
+        text = Path(path).read_text(encoding="utf-8", errors="replace")
+    except Exception:
+        return ""
+    return text[-max_chars:]
+
+
+def read_backfill_job_payload(job_id: str) -> tuple[int, dict]:
+    job = read_backfill_job(job_id)
+    if job is None:
+        return 404, {"error": "Backfill job not found"}
+    payload = dict(job)
+    log_path = payload.get("log_path")
+    if log_path:
+        payload["tail"] = _tail_text_file(str(log_path))
+    return 200, payload
+
+
+def read_latest_backfill_job_payload() -> tuple[int, dict]:
+    job = read_latest_backfill_job()
+    if job is None:
+        return 200, {}
+    payload = dict(job)
+    log_path = payload.get("log_path")
+    if log_path:
+        payload["tail"] = _tail_text_file(str(log_path))
+    return 200, payload
+
+
+def build_backfill_command_and_env(payload: dict) -> tuple[list[str], dict[str, str]]:
+    if not Path(PAPERLESS_BACKFILL).is_file():
+        raise RuntimeError(f"Backfill script not found: {PAPERLESS_BACKFILL}")
+    paperless_env = load_paperless_env()
+    child_env = os.environ.copy()
+    for key in (
+        "PAPERLESS_API_URL",
+        "PAPERLESS_API_TOKEN",
+        "PAPERLESS_AI_PROVIDER",
+        "PAPERLESS_AI_OLLAMA_URL",
+        "PAPERLESS_AI_OLLAMA_MODEL",
+        "PAPERLESS_AI_FALLBACK_ENABLED",
+        "PAPERLESS_AI_FALLBACK_MODEL",
+        "PAPERLESS_AI_FALLBACK_ON_TIMEOUT_ONLY",
+        "PAPERLESS_AI_FALLBACK_HTTP_TIMEOUT_SECONDS",
+        "PAPERLESS_AI_PROMPT_FILE",
+        "PAPERLESS_AI_CONTENT_CHARS",
+        "PAPERLESS_AI_MIN_CONFIDENCE",
+        "PAPERLESS_AI_DEFAULT_TAG_COLOR",
+        "PAPERLESS_AI_HTTP_TIMEOUT_SECONDS",
+        "OPENAI_API_KEY",
+        "PAPERLESS_AI_OPENAI_MODEL",
+    ):
+        if key in paperless_env:
+            child_env[key] = paperless_env[key]
+    cmd = ["/usr/bin/python3", PAPERLESS_BACKFILL]
+    limit = int(payload.get("limit") or 0)
+    from_id = int(payload.get("from_id") or 0)
+    query = str(payload.get("query") or "").strip()
+    document_ids = [int(doc_id) for doc_id in payload.get("document_ids", []) if int(doc_id) > 0]
+    if payload.get("only_missing_metadata"):
+        cmd.append("--only-missing-metadata")
+    if limit > 0:
+        cmd.extend(["--limit", str(limit)])
+    if from_id > 0:
+        cmd.extend(["--from-id", str(from_id)])
+    if query:
+        cmd.extend(["--query", query])
+    for doc_id in document_ids:
+        cmd.extend(["--document-id", str(doc_id)])
+    if payload.get("dry_run"):
+        cmd.append("--dry-run")
+    return cmd, child_env
+
+
+def run_backfill_job(job_id: str, cmd: list[str], child_env: dict[str, str], log_path: str) -> None:
+    started = time.strftime("%Y-%m-%d %H:%M:%S")
+    try:
+        with open(log_path, "a", encoding="utf-8") as handle:
+            handle.write(f"[{started}] Starting job {job_id}\n")
+            handle.write("Command: " + " ".join(cmd) + "\n\n")
+            handle.flush()
+            process = subprocess.Popen(
+                cmd,
+                env=child_env,
+                stdout=handle,
+                stderr=subprocess.STDOUT,
+                text=True,
+            )
+            current = read_backfill_job(job_id) or {}
+            current.update({"pid": process.pid, "status": "running"})
+            store_backfill_job(job_id, current)
+            returncode = process.wait()
+            finished = time.strftime("%Y-%m-%d %H:%M:%S")
+            handle.write(f"\n[{finished}] Job finished with returncode {returncode}\n")
+            handle.flush()
+        final = read_backfill_job(job_id) or {}
+        final.update(
+            {
+                "status": "done" if returncode == 0 else "error",
+                "returncode": returncode,
+                "finished_at": finished,
+            }
+        )
+        store_backfill_job(job_id, final)
+    except Exception as exc:
+        finished = time.strftime("%Y-%m-%d %H:%M:%S")
+        Path(log_path).write_text(f"[{finished}] Job failed before completion: {exc}\n", encoding="utf-8")
+        final = read_backfill_job(job_id) or {}
+        final.update({"status": "error", "error": str(exc), "finished_at": finished, "returncode": -1})
+        store_backfill_job(job_id, final)
+
+
+def start_paperless_backfill(payload: dict) -> tuple[int, dict]:
+    cmd, child_env = build_backfill_command_and_env(payload)
+    job_id = uuid.uuid4().hex
+    started = time.strftime("%Y-%m-%d %H:%M:%S")
+    review_tag_name = load_paperless_env().get("PAPERLESS_AI_REVIEW_TAG_NAME", "KI Nachpruefen")
+    log_path = f"/tmp/paperless-ai-backfill-{job_id}.log"
+    job = {
+        "id": job_id,
+        "status": "starting",
+        "started_at": started,
+        "log_path": log_path,
+        "document_count": len(payload.get("document_ids", []) or []),
+        "review_tag_name": review_tag_name,
+        "mode": str(payload.get("mode") or ""),
+    }
+    if payload.get("clear_review_tags_first"):
+        status, summary = clear_review_tag_assignments()
+        if status != 200:
+            return status, summary
+        job["clear_summary"] = f"{summary.get('updated_documents', 0)} Dokumente bereinigt"
+    store_backfill_job(job_id, job)
+    worker = threading.Thread(
+        target=run_backfill_job,
+        args=(job_id, cmd, child_env, log_path),
+        daemon=True,
+    )
+    worker.start()
+    return 200, {"job": job}
+
+
 class Handler(BaseHTTPRequestHandler):
     def _send(self, status: int, body: bytes, content_type: str) -> None:
         self.send_response(status)
@@ -3599,6 +3975,21 @@ class Handler(BaseHTTPRequestHandler):
                 self._send(404, json.dumps({"error": "Preview job not found"}).encode("utf-8"), "application/json")
                 return
             self._send(200, json.dumps(payload).encode("utf-8"), "application/json")
+            return
+        if self.path == "/api/paperless/backfill-jobs/latest":
+            try:
+                status, payload = read_latest_backfill_job_payload()
+            except Exception as exc:
+                status, payload = 500, {"error": str(exc)}
+            self._send(status, json.dumps(payload).encode("utf-8"), "application/json")
+            return
+        if self.path.startswith("/api/paperless/backfill-jobs/"):
+            job_id = self.path.rsplit("/", 1)[-1]
+            try:
+                status, payload = read_backfill_job_payload(job_id)
+            except Exception as exc:
+                status, payload = 500, {"error": str(exc)}
+            self._send(status, json.dumps(payload).encode("utf-8"), "application/json")
             return
         if self.path.startswith("/api/paperless/document/"):
             try:
@@ -3696,7 +4087,15 @@ class Handler(BaseHTTPRequestHandler):
                 status, response = 500, {"error": str(exc)}
             self._send(status, json.dumps(response).encode("utf-8"), "application/json")
             return
-        if self.path not in ("/api/chat", "/api/paperless/backfill", "/api/paperless/model", "/api/paperless/config", "/api/preview/config", "/api/paperless/prompt"):
+        if self.path not in (
+            "/api/chat",
+            "/api/paperless/backfill",
+            "/api/paperless/model",
+            "/api/paperless/config",
+            "/api/preview/config",
+            "/api/paperless/prompt",
+            "/api/paperless/review-tags/clear",
+        ):
             self._send(404, b"Not found", "text/plain; charset=utf-8")
             return
         length = int(self.headers.get("Content-Length", "0"))
@@ -3734,9 +4133,17 @@ class Handler(BaseHTTPRequestHandler):
                 status, response = save_paperless_prompt(payload.get("prompt"))
             except Exception as exc:
                 status, response = 500, {"error": str(exc)}
+        elif self.path == "/api/paperless/review-tags/clear":
+            try:
+                status, response = clear_review_tag_assignments()
+            except Exception as exc:
+                status, response = 500, {"error": str(exc)}
         else:
             try:
-                status, response = run_paperless_backfill(payload)
+                if payload.get("dry_run"):
+                    status, response = run_paperless_backfill(payload)
+                else:
+                    status, response = start_paperless_backfill(payload)
             except Exception as exc:
                 status, response = 500, {"error": str(exc)}
         self._send(status, json.dumps(response).encode("utf-8"), "application/json")
