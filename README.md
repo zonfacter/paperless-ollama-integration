@@ -80,6 +80,8 @@ Der aktuelle Stand dieses Projekts bildet eine funktionierende Installation mit 
   - Installations-, Betriebs- und Sicherheitsdokumentation
 - `docker/paddleocr-api/`
   - optionaler `PaddleOCR`-API-Container fuer OCR-Experimente und spaetere Integration
+- `scripts/install-paddleocr-api.sh`
+  - einfacher Docker-Installer fuer die optionale `PaddleOCR`-API
 
 ## Architektur
 

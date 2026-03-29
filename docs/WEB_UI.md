@@ -40,6 +40,9 @@ Funktionen:
 - OCR-Zeichen setzen
 - Mindest-Confidence setzen
 - getrenntes Vorschau-OCR-Modell setzen
+- OCR-Quelle fuer die Vorschau zwischen `Paperless OCR`, `PaddleOCR Seite 1` und `Hybrid` umschalten
+- `PaddleOCR`-API-URL, Timeout und Seitenlimit setzen
+- lokale PaddleOCR-Installationshilfe direkt in der UI laden
 - eigenes Vision-Modell fuer die Review-Vorschau setzen
 - Vision-Seitenlimit, Vision-Timeout und Vision-Tag konfigurieren
 - Prompt laden, aendern und speichern
@@ -81,6 +84,19 @@ Der Layout-Modus wird im Browser gespeichert. Dadurch kann derselbe Host auf gro
 6. OCR-Vorschlag pruefen
 7. auf Hintergrund-Review warten, wenn Vision aktiv ist
 8. `Vorschlag uebernehmen`
+
+### PaddleOCR als zweite OCR-Quelle
+
+1. In `Steuerung` die `OCR-Quelle` fuer die Vorschau auf `PaddleOCR Seite 1` oder `Hybrid` stellen
+2. Falls noetig `PaddleOCR Installationshilfe` oeffnen
+3. `PaddleOCR API URL` pruefen
+4. Dokumentvorschau erneut starten
+
+Dabei gilt:
+
+- `PaddleOCR Seite 1` ersetzt den Preview-OCR-Text fuer die Einzeldokument-Vorschau
+- `Hybrid` zeigt `PaddleOCR` und `Paperless OCR` gemeinsam als Basis fuer Strukturierung und KI-Vorschlag
+- der normale produktive Paperless-Hook bleibt davon unberuehrt
 
 ### Bestandsdokumente nachziehen
 
@@ -124,6 +140,7 @@ Wichtig:
 - die technische Anbindung zusaetzlicher OCR-/Vision-Modelle funktioniert ueber denselben Vorschaupfad
 - Modelle koennen getrennt fuer Vorschau-OCR, Vision-Review und Tag-Review konfiguriert werden
 - Modellvergleiche lassen sich dadurch in derselben UI fahren, ohne den produktiven Hook umzubauen
+- mit `PaddleOCR` kann zusaetzlich eine zweite OCR-Quelle per lokaler HTTP-API angebunden werden
 
 Die praktischen Tests auf einer CPU-VM fuehrten aber zu einer klaren Produktentscheidung:
 

@@ -25,6 +25,10 @@ PAPERLESS_BACKFILL = os.getenv("PAPERLESS_BACKFILL", "/opt/paperless/ai_backfill
 PAPERLESS_MODEL_HELPER = os.getenv("PAPERLESS_MODEL_HELPER", "/usr/local/sbin/paperless-set-ollama-model")
 PAPERLESS_AI_HELPER = os.getenv("PAPERLESS_AI_HELPER", "/usr/local/sbin/paperless-ai-admin")
 PREVIEW_CONFIG_PATH = os.getenv("PAPERLESS_PREVIEW_CONFIG_PATH", "/home/thomas/ollama-web/preview_config.json")
+PADDLEOCR_API_INSTALL_SCRIPT = os.getenv(
+    "PADDLEOCR_API_INSTALL_SCRIPT",
+    "/home/hytale/paperless-ollama-integration/scripts/install-paddleocr-api.sh",
+)
 PREVIEW_JOBS: dict[str, dict] = {}
 PREVIEW_JOBS_LOCK = threading.Lock()
 
@@ -855,6 +859,11 @@ HTML = """<!doctype html>
                       <div id="doc-detail-ocr" class="ocr-box">Noch kein Dokument ausgewaehlt.</div>
                     </div>
                     <div class="detail-card">
+                      <h3>PaddleOCR-Vorschau</h3>
+                      <div class="detail-sub">Optionale zweite OCR-Quelle fuer Seite 1. Gut fuer Briefkoepfe, Umlaute und schwer lesbare Scanbereiche.</div>
+                      <div id="doc-detail-paddle-ocr" class="ocr-box">Noch keine PaddleOCR-Vorschau vorhanden.</div>
+                    </div>
+                    <div class="detail-card">
                       <h3>OCR-Struktur</h3>
                       <div class="detail-sub">Heuristisch erkannte Bereiche wie Briefkopf, Adressat, Datum, Betreff und Signatur ueber mehrere Seiten hinweg.</div>
                       <div id="doc-detail-ocr-structure" class="ocr-box">Noch keine OCR-Struktur erkannt.</div>
@@ -1050,6 +1059,30 @@ HTML = """<!doctype html>
                 </div>
                 <div class="config-grid">
                   <div class="field">
+                    <label for="preview-ocr-source">OCR-Quelle fuer Vorschau</label>
+                    <select id="preview-ocr-source">
+                      <option value="paperless">Paperless OCR</option>
+                      <option value="paddleocr">PaddleOCR Seite 1</option>
+                      <option value="hybrid">Hybrid: PaddleOCR + Paperless OCR</option>
+                    </select>
+                    <small>Legt fest, ob die Vorschau nur den bestehenden Paperless-OCR-Text, nur PaddleOCR fuer Seite 1 oder beide Quellen kombiniert nutzt.</small>
+                  </div>
+                  <div class="field">
+                    <label for="preview-paddleocr-api-url">PaddleOCR API URL</label>
+                    <input id="preview-paddleocr-api-url" type="text" placeholder="http://127.0.0.1:8091">
+                    <small>Lokaler HTTP-Dienst fuer PaddleOCR. Die Vorschau fragt ihn nur an, wenn `PaddleOCR` oder `Hybrid` aktiv ist.</small>
+                  </div>
+                  <div class="field">
+                    <label for="preview-paddleocr-timeout">PaddleOCR-Timeout in Sekunden</label>
+                    <input id="preview-paddleocr-timeout" type="number" min="10" step="10">
+                    <small>Wie lange auf die zweite OCR-Quelle gewartet wird. Bei Fehlern faellt die Vorschau auf Paperless OCR zurueck.</small>
+                  </div>
+                  <div class="field">
+                    <label for="preview-paddleocr-max-pages">PaddleOCR nur bis Seitenzahl</label>
+                    <input id="preview-paddleocr-max-pages" type="number" min="1" step="1">
+                    <small>Begrenzt die zweite OCR-Quelle auf kurze PDFs. Laengere Dokumente bleiben bei Paperless OCR.</small>
+                  </div>
+                  <div class="field">
                     <label for="preview-ocr-model">Vorschau-OCR-Modell</label>
                     <select id="preview-ocr-model"></select>
                     <small>Dieses Modell erzeugt den ersten Vorschlag in der Review-Ansicht. Kleiner ist schneller, groesser meist genauer.</small>
@@ -1091,8 +1124,10 @@ HTML = """<!doctype html>
                 <div class="actions">
                   <button id="save-preview-config">Preview & Vision speichern</button>
                   <button id="reload-preview-config" class="secondary">Neu laden</button>
+                  <button id="show-paddleocr-install" class="secondary">PaddleOCR Installationshilfe</button>
                 </div>
                 <div id="preview-config-status" class="statusline">Preview-Konfiguration noch nicht geladen.</div>
+                <div id="paddleocr-install-plan" class="logbox">Noch keine Installationshilfe geladen.</div>
               </div>
               <div class="section">
                 <div class="section-head">
@@ -1167,6 +1202,10 @@ HTML = """<!doctype html>
     const reloadAiConfigBtn = document.getElementById('reload-ai-config');
     const aiConfigStatusEl = document.getElementById('ai-config-status');
     const previewOcrModelEl = document.getElementById('preview-ocr-model');
+    const previewOcrSourceEl = document.getElementById('preview-ocr-source');
+    const previewPaddleApiUrlEl = document.getElementById('preview-paddleocr-api-url');
+    const previewPaddleTimeoutEl = document.getElementById('preview-paddleocr-timeout');
+    const previewPaddleMaxPagesEl = document.getElementById('preview-paddleocr-max-pages');
     const previewVisionModelEl = document.getElementById('preview-vision-model');
     const previewVisionContentCharsEl = document.getElementById('preview-vision-content-chars');
     const previewVisionTimeoutEl = document.getElementById('preview-vision-timeout');
@@ -1176,7 +1215,9 @@ HTML = """<!doctype html>
     const previewVisionTagColorPickerEl = document.getElementById('preview-vision-tag-color-picker');
     const savePreviewConfigBtn = document.getElementById('save-preview-config');
     const reloadPreviewConfigBtn = document.getElementById('reload-preview-config');
+    const showPaddleOcrInstallBtn = document.getElementById('show-paddleocr-install');
     const previewConfigStatusEl = document.getElementById('preview-config-status');
+    const paddleOcrInstallPlanEl = document.getElementById('paddleocr-install-plan');
     const promptEditorEl = document.getElementById('prompt-editor');
     const savePromptBtn = document.getElementById('save-prompt');
     const reloadPromptBtn = document.getElementById('reload-prompt');
@@ -1196,6 +1237,7 @@ HTML = """<!doctype html>
     const docSelectionInfoEl = document.getElementById('doc-selection-info');
     const docDetailMetaEl = document.getElementById('doc-detail-meta');
     const docDetailOcrEl = document.getElementById('doc-detail-ocr');
+    const docDetailPaddleOcrEl = document.getElementById('doc-detail-paddle-ocr');
     const docDetailOcrStructureEl = document.getElementById('doc-detail-ocr-structure');
     const docDetailVisionTextEl = document.getElementById('doc-detail-vision-text');
     const docDetailStatusEl = document.getElementById('doc-detail-status');
@@ -1428,6 +1470,7 @@ HTML = """<!doctype html>
         <div class="meta-row"><div class="meta-label">Tags</div><div>${formatValue(tags)}</div></div>
       `;
       docDetailOcrEl.textContent = doc.content || 'Kein OCR-Inhalt vorhanden.';
+      docDetailPaddleOcrEl.textContent = 'Noch keine PaddleOCR-Vorschau vorhanden.';
       docDetailOcrStructureEl.textContent = 'Noch keine OCR-Struktur erkannt.';
       docDetailVisionTextEl.textContent = 'Noch keine Vision-Lesefassung vorhanden.';
       renderProposal(null);
@@ -1448,6 +1491,7 @@ HTML = """<!doctype html>
       if (!proposal) {
         docProposalMetaEl.innerHTML = '<div class="doc-empty">Noch kein KI-Vorschlag vorhanden.</div>';
         docProposalReasonEl.textContent = 'Noch kein KI-Vorschlag vorhanden.';
+        docDetailPaddleOcrEl.textContent = 'Noch keine PaddleOCR-Vorschau vorhanden.';
         docDetailOcrStructureEl.textContent = 'Noch keine OCR-Struktur erkannt.';
         docDetailVisionTextEl.textContent = 'Noch keine Vision-Lesefassung vorhanden.';
         docApplyProposalBtn.disabled = true;
@@ -1465,16 +1509,22 @@ HTML = """<!doctype html>
         <div class="meta-row"><div class="meta-label">Modell</div><div>${formatValue(proposal._model)}</div></div>
         <div class="meta-row"><div class="meta-label">Fallback</div><div>${proposal._fallback_used ? `ja, von ${formatValue(proposal._fallback_from)}` : 'nein'}</div></div>
         <div class="meta-row"><div class="meta-label">Hybrid</div><div>${proposal._hybrid_used ? 'ja' : proposal._hybrid_pending ? 'laeuft' : proposal._vision_requested ? 'angefragt' : 'nein'}</div></div>
+        <div class="meta-row"><div class="meta-label">OCR-Quelle</div><div>${formatValue(proposal._ocr_source || 'paperless')}</div></div>
         <div class="meta-row"><div class="meta-label">OCR-Modell</div><div>${formatValue(proposal._ocr_model || proposal._model)}</div></div>
+        <div class="meta-row"><div class="meta-label">PaddleOCR</div><div>${proposal._paddle_ocr_used ? `ja, ${proposal._paddle_ocr_seconds || '-'}s` : proposal._paddle_ocr_error ? 'fehlerhaft' : 'nein'}</div></div>
         <div class="meta-row"><div class="meta-label">Vision-Modell</div><div>${proposal._vision_used ? formatValue(proposal._vision_model) : '-'}</div></div>
         <div class="meta-row"><div class="meta-label">Vision</div><div>${proposal._vision_used ? `ja, ${proposal._vision_pages || 0} Seite(n)` : proposal._hybrid_pending ? 'laeuft' : proposal._vision_requested ? 'angefragt' : 'nein'}</div></div>
         <div class="meta-row"><div class="meta-label">Review</div><div>${proposal._review_needed ? 'ja' : 'nein'}</div></div>
         <div class="meta-row"><div class="meta-label">Review-Gruende</div><div>${formatValue(proposal._review_reasons)}</div></div>
       `;
       docProposalReasonEl.textContent = proposal.reason || '-';
+      if (proposal._paddle_ocr_error) {
+        docProposalReasonEl.textContent += `\n\nPaddleOCR-Hinweis: ${proposal._paddle_ocr_error}`;
+      }
       if (proposal._vision_error) {
         docProposalReasonEl.textContent += `\n\nVision-Hinweis: ${proposal._vision_error}`;
       }
+      docDetailPaddleOcrEl.textContent = proposal._paddle_ocr_excerpt || 'Noch keine PaddleOCR-Vorschau vorhanden.';
       docDetailOcrStructureEl.textContent = proposal._ocr_structure_summary || 'Noch keine OCR-Struktur erkannt.';
       docDetailVisionTextEl.textContent = proposal._vision_refined_excerpt || 'Noch keine Vision-Lesefassung vorhanden.';
       docApplyProposalBtn.disabled = false;
@@ -1758,6 +1808,10 @@ HTML = """<!doctype html>
         if (data.preview_ocr_model && availableModelNames.includes(data.preview_ocr_model)) {
           previewOcrModelEl.value = data.preview_ocr_model;
         }
+        previewOcrSourceEl.value = data.ocr_source || 'paperless';
+        previewPaddleApiUrlEl.value = data.paddleocr_api_url || '';
+        previewPaddleTimeoutEl.value = data.paddleocr_timeout_seconds || '';
+        previewPaddleMaxPagesEl.value = data.paddleocr_max_pages || '';
         if (data.vision_model && availableModelNames.includes(data.vision_model)) {
           previewVisionModelEl.value = data.vision_model;
         }
@@ -1782,6 +1836,10 @@ HTML = """<!doctype html>
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
+            ocr_source: previewOcrSourceEl.value,
+            paddleocr_api_url: previewPaddleApiUrlEl.value.trim(),
+            paddleocr_timeout_seconds: previewPaddleTimeoutEl.value.trim(),
+            paddleocr_max_pages: previewPaddleMaxPagesEl.value.trim(),
             preview_ocr_model: previewOcrModelEl.value,
             vision_model: previewVisionModelEl.value,
             vision_content_chars: previewVisionContentCharsEl.value.trim(),
@@ -1799,6 +1857,24 @@ HTML = """<!doctype html>
         previewConfigStatusEl.className = 'statusline warn';
       } finally {
         savePreviewConfigBtn.disabled = false;
+      }
+    }
+
+    async function loadPaddleOcrInstallPlan() {
+      paddleOcrInstallPlanEl.textContent = 'Installationshilfe wird geladen...';
+      try {
+        const res = await fetch('/api/paddleocr/install-plan');
+        const data = await res.json();
+        if (!res.ok) throw new Error(data.error || 'Fehler');
+        const lines = [];
+        if (data.script) lines.push(`Skript: ${data.script}`);
+        if (Array.isArray(data.commands)) {
+          lines.push('');
+          lines.push(...data.commands);
+        }
+        paddleOcrInstallPlanEl.textContent = lines.join('\n') || 'Keine Installationshilfe vorhanden.';
+      } catch (err) {
+        paddleOcrInstallPlanEl.textContent = `Fehler: ${err.message}`;
       }
     }
 
@@ -1950,6 +2026,7 @@ HTML = """<!doctype html>
     reloadAiConfigBtn.addEventListener('click', loadAiConfig);
     savePreviewConfigBtn.addEventListener('click', savePreviewConfig);
     reloadPreviewConfigBtn.addEventListener('click', loadPreviewConfig);
+    showPaddleOcrInstallBtn.addEventListener('click', loadPaddleOcrInstallPlan);
     savePromptBtn.addEventListener('click', savePrompt);
     reloadPromptBtn.addEventListener('click', loadPrompt);
     docRefreshBtn.addEventListener('click', loadDocuments);
@@ -2036,6 +2113,10 @@ def ollama_num_thread() -> int:
 def default_preview_config() -> dict[str, str]:
     return {
         "preview_ocr_model": os.getenv("PAPERLESS_PREVIEW_OCR_MODEL", "qwen3.5:4b"),
+        "ocr_source": os.getenv("PAPERLESS_PREVIEW_OCR_SOURCE", "paperless"),
+        "paddleocr_api_url": os.getenv("PAPERLESS_PREVIEW_PADDLEOCR_API_URL", "http://127.0.0.1:8091"),
+        "paddleocr_timeout_seconds": os.getenv("PAPERLESS_PREVIEW_PADDLEOCR_TIMEOUT_SECONDS", "90"),
+        "paddleocr_max_pages": os.getenv("PAPERLESS_PREVIEW_PADDLEOCR_MAX_PAGES", "1"),
         "vision_model": os.getenv("PAPERLESS_PREVIEW_VISION_MODEL", "qwen3.5:0.8b"),
         "vision_content_chars": os.getenv("PAPERLESS_PREVIEW_VISION_CONTENT_CHARS", "800"),
         "vision_timeout_seconds": os.getenv("PAPERLESS_PREVIEW_VISION_TIMEOUT_SECONDS", "120"),
@@ -2381,6 +2462,106 @@ def render_pdf_preview_images(pdf_bytes: bytes, max_pages: int = 1) -> list[str]
         if not image_paths:
             raise RuntimeError("pdftoppm did not produce preview images")
         return [base64.b64encode(path.read_bytes()).decode("ascii") for path in image_paths]
+
+
+def render_pdf_preview_image_bytes(pdf_bytes: bytes, max_pages: int = 1) -> list[bytes]:
+    pdftoppm = "/usr/bin/pdftoppm"
+    if not Path(pdftoppm).is_file():
+        raise RuntimeError("pdftoppm is not installed on the host")
+    with tempfile.TemporaryDirectory(prefix="paperless-ai-paddleocr-") as tmpdir:
+        tmp_path = Path(tmpdir)
+        pdf_path = tmp_path / "document.pdf"
+        pdf_path.write_bytes(pdf_bytes)
+        output_prefix = tmp_path / "page"
+        cmd = [
+            pdftoppm,
+            "-jpeg",
+            "-f",
+            "1",
+            "-l",
+            str(max(1, max_pages)),
+            str(pdf_path),
+            str(output_prefix),
+        ]
+        result = subprocess.run(cmd, capture_output=True, text=True, check=False, timeout=180)
+        if result.returncode != 0:
+            output = ((result.stdout or "") + (result.stderr or "")).strip()
+            raise RuntimeError(output or "pdftoppm failed")
+        image_paths = sorted(tmp_path.glob("page-*.jpg"))
+        if not image_paths:
+            raise RuntimeError("pdftoppm did not produce preview images")
+        return [path.read_bytes() for path in image_paths]
+
+
+def build_multipart_form(field_name: str, filename: str, content: bytes, content_type: str = "application/octet-stream") -> tuple[bytes, str]:
+    boundary = f"----paperlessAiBoundary{uuid.uuid4().hex}"
+    body = bytearray()
+    body.extend(f"--{boundary}\r\n".encode("utf-8"))
+    body.extend(
+        (
+            f'Content-Disposition: form-data; name="{field_name}"; filename="{filename}"\r\n'
+            f"Content-Type: {content_type}\r\n\r\n"
+        ).encode("utf-8")
+    )
+    body.extend(content)
+    body.extend(f"\r\n--{boundary}--\r\n".encode("utf-8"))
+    return bytes(body), boundary
+
+
+def call_paddleocr_preview(image_bytes: bytes, filename: str, base_url: str, timeout: float) -> dict:
+    payload, boundary = build_multipart_form("file", filename, image_bytes, "image/jpeg")
+    request = urllib.request.Request(
+        f"{base_url.rstrip('/')}/ocr",
+        data=payload,
+        headers={"Content-Type": f"multipart/form-data; boundary={boundary}", "Accept": "application/json"},
+        method="POST",
+    )
+    with urllib.request.urlopen(request, timeout=timeout) as response:
+        return json.loads(response.read().decode("utf-8"))
+
+
+def fetch_paddleocr_preview(document_id: int, document: dict, preview_config: dict[str, str]) -> tuple[dict, dict]:
+    original_name = str(document.get("original_file_name") or "").lower()
+    if not original_name.endswith(".pdf"):
+        raise RuntimeError("PaddleOCR preview is currently only enabled for PDF documents")
+    page_count = int(document.get("page_count") or 0)
+    max_pages = positive_int(preview_config.get("paddleocr_max_pages"), 1)
+    if page_count and page_count > max_pages:
+        raise RuntimeError(f"PaddleOCR uebersprungen: {page_count} Seiten, Limit ist {max_pages}")
+    pdf_bytes, content_type = fetch_paperless_document_binary(document_id)
+    if "pdf" not in (content_type or "").lower():
+        raise RuntimeError(f"unexpected content type for PaddleOCR preview: {content_type or '-'}")
+    images = render_pdf_preview_image_bytes(pdf_bytes, max_pages=1)
+    started = time.time()
+    result = call_paddleocr_preview(
+        images[0],
+        f"document-{document_id}-page-1.jpg",
+        preview_config.get("paddleocr_api_url", "http://127.0.0.1:8091"),
+        float(preview_config.get("paddleocr_timeout_seconds", "90") or "90"),
+    )
+    return result, {
+        "seconds": round(time.time() - started, 2),
+        "lines": int(result.get("line_count") or 0),
+        "pages": len(images),
+    }
+
+
+def build_install_plan() -> tuple[int, dict]:
+    script_path = Path(PADDLEOCR_API_INSTALL_SCRIPT)
+    repo_dir = script_path.parent.parent if script_path.name == "install-paddleocr-api.sh" else script_path.parent
+    return 200, {
+        "available": script_path.name == "install-paddleocr-api.sh",
+        "script": str(script_path),
+        "commands": [
+            f"cd {repo_dir}",
+            f"sudo bash {script_path}",
+        ],
+        "notes": [
+            "Der Installationspfad nutzt plain Docker und benoetigt kein docker compose.",
+            "Standardport ist 8091 und kann spaeter in der Preview-Konfiguration angepasst werden.",
+            "Nach der Installation kann die Vorschau OCR-Quelle auf PaddleOCR oder Hybrid gestellt werden.",
+        ],
+    }
 
 
 def build_vision_prompt(base_prompt: str) -> str:
@@ -3143,7 +3324,31 @@ def build_ai_preview(document_id: int, use_vision: bool = False) -> tuple[int, d
         for tag in existing_tags
         if isinstance(tag, dict) and module.looks_like_person_tag(str(tag.get("name", "")))
     ]
-    ocr_view = build_structured_ocr_view(str(document.get("content") or ""))
+    paperless_ocr_text = str(document.get("content") or "")
+    ocr_source = preview_config.get("ocr_source", "paperless").strip().lower() or "paperless"
+    effective_ocr_text = paperless_ocr_text
+    paddle_ocr_text = ""
+    paddle_meta: dict[str, object] = {}
+    paddle_error = ""
+    if ocr_source in {"paddleocr", "hybrid"}:
+        try:
+            paddle_result, paddle_meta = fetch_paddleocr_preview(document_id, document, preview_config)
+            paddle_ocr_text = str(paddle_result.get("text") or "").strip()
+            if paddle_ocr_text:
+                if ocr_source == "paddleocr":
+                    effective_ocr_text = paddle_ocr_text
+                else:
+                    effective_ocr_text = "\n\n".join(
+                        part for part in (
+                            "PADDLEOCR SEITE 1:\n" + paddle_ocr_text,
+                            "PAPERLESS OCR:\n" + paperless_ocr_text if paperless_ocr_text else "",
+                        ) if part
+                    )
+        except Exception as exc:
+            paddle_error = str(exc)
+            effective_ocr_text = paperless_ocr_text
+            ocr_source = "paperless"
+    ocr_view = build_structured_ocr_view(effective_ocr_text)
     document_hints = derive_document_hints(ocr_view)
     prompt_document = dict(document)
     prompt_document["content"] = "\n\n".join(
@@ -3175,6 +3380,11 @@ def build_ai_preview(document_id: int, use_vision: bool = False) -> tuple[int, d
     proposal["_review_reasons"] = review_reasons
     proposal["_model"] = response_meta.get("model", "")
     proposal["_ocr_model"] = response_meta.get("model", "")
+    proposal["_ocr_source"] = ocr_source
+    proposal["_paddle_ocr_used"] = bool(paddle_ocr_text)
+    proposal["_paddle_ocr_seconds"] = paddle_meta.get("seconds", "")
+    proposal["_paddle_ocr_excerpt"] = paddle_ocr_text[:2200]
+    proposal["_paddle_ocr_error"] = paddle_error
     proposal["_fallback_used"] = bool(response_meta.get("fallback_used"))
     proposal["_fallback_from"] = response_meta.get("fallback_from", "")
     proposal["_vision_used"] = False
@@ -3405,6 +3615,13 @@ class Handler(BaseHTTPRequestHandler):
         if self.path == "/api/preview/config":
             try:
                 status, payload = read_preview_config()
+            except Exception as exc:
+                status, payload = 500, {"error": str(exc)}
+            self._send(status, json.dumps(payload).encode("utf-8"), "application/json")
+            return
+        if self.path == "/api/paddleocr/install-plan":
+            try:
+                status, payload = build_install_plan()
             except Exception as exc:
                 status, payload = 500, {"error": str(exc)}
             self._send(status, json.dumps(payload).encode("utf-8"), "application/json")

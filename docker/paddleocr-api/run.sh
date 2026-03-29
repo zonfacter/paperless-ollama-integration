@@ -2,9 +2,6 @@
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+REPO_DIR="$(cd "$SCRIPT_DIR/../.." && pwd)"
 
-cd "$SCRIPT_DIR"
-
-docker compose -f docker-compose.example.yml up --build -d
-
-echo "PaddleOCR API started on http://127.0.0.1:8091"
+bash "$REPO_DIR/scripts/install-paddleocr-api.sh"
