@@ -18,6 +18,21 @@ def env_bool(name: str, default: bool) -> bool:
     return value.strip().lower() in {"1", "true", "yes", "on"}
 
 
+def to_jsonable(value: Any) -> Any:
+    if hasattr(value, "tolist"):
+        return value.tolist()
+    if hasattr(value, "item"):
+        try:
+            return value.item()
+        except Exception:
+            pass
+    if isinstance(value, dict):
+        return {str(key): to_jsonable(item) for key, item in value.items()}
+    if isinstance(value, (list, tuple)):
+        return [to_jsonable(item) for item in value]
+    return value
+
+
 def build_ocr() -> PaddleOCR:
     return PaddleOCR(
         lang=os.getenv("PADDLEOCR_LANG", "german"),
@@ -50,8 +65,8 @@ def normalize_result(raw: list[Any]) -> dict[str, Any]:
             items.append(
                 {
                     "text": text,
-                    "score": score,
-                    "polygon": polygon,
+                    "score": to_jsonable(score),
+                    "polygon": to_jsonable(polygon),
                 }
             )
             if text:
