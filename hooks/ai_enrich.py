@@ -835,6 +835,10 @@ def merge_tag_candidates(primary: list[str], secondary: list[str], limit: int = 
     return merged
 
 
+def hard_rules_enabled() -> bool:
+    return env("PAPERLESS_AI_TAG_RULES_FORCE", "false").lower() in ("1", "true", "yes", "on")
+
+
 def assess_review_flags(result: dict, document: dict) -> tuple[bool, list[str]]:
     reasons: list[str] = []
     family = detect_document_family(document, result)
@@ -886,10 +890,12 @@ def apply_tag_review(document: dict, result: dict) -> tuple[dict, dict]:
         fallback_enabled_override=fallback_enabled,
     )
     reviewed = dict(result)
-    reviewed["tags"] = merge_tag_candidates(
-        fallback_tags_for_family(result, document),
-        sanitize_tag_result(raw_tags),
-    )
+    rule_tags = fallback_tags_for_family(result, document)
+    model_tags = sanitize_tag_result(raw_tags)
+    if hard_rules_enabled() and rule_tags:
+        reviewed["tags"] = rule_tags[:3]
+    else:
+        reviewed["tags"] = merge_tag_candidates(rule_tags, model_tags)
     reviewed = refine_result(reviewed, document)
     meta["enabled"] = True
     return reviewed, meta

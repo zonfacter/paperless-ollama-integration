@@ -974,7 +974,10 @@ HTML = """<!doctype html>
                   </div>
                   <div class="field">
                     <label for="cfg-tag-color">Standard-Tag-Farbe</label>
-                    <input id="cfg-tag-color" type="text" placeholder="#4f6bed">
+                    <div style="display:flex;gap:12px;align-items:center;">
+                      <input id="cfg-tag-color-picker" type="color" value="#4f6bed" style="width:56px;height:44px;padding:4px;">
+                      <input id="cfg-tag-color" type="text" placeholder="#4f6bed">
+                    </div>
                     <small>Diese Farbe wird für neu von der KI angelegte Tags genutzt, wenn noch kein Tag vorhanden ist.</small>
                   </div>
                   <div class="field">
@@ -988,6 +991,14 @@ HTML = """<!doctype html>
                     <small>Wie lange das Tag-Modell maximal laufen darf. Das betrifft nur die Tag-Endauswahl.</small>
                   </div>
                   <div class="field">
+                    <label for="cfg-tag-rules-force">Harte Familienregeln</label>
+                    <select id="cfg-tag-rules-force">
+                      <option value="false">Aus</option>
+                      <option value="true">Ein</option>
+                    </select>
+                    <small>Wenn aktiv, duerfen passende Familienregeln das Modell bei Tags direkt ueberstimmen. Standard ist bewusst aus.</small>
+                  </div>
+                  <div class="field">
                     <label for="cfg-review-min-confidence">Review-Tag unter Confidence</label>
                     <input id="cfg-review-min-confidence" type="number" min="0" max="1" step="0.05">
                     <small>Unterhalb dieses Werts markiert die Pipeline das Dokument zusaetzlich fuer Nachpruefung.</small>
@@ -999,7 +1010,10 @@ HTML = """<!doctype html>
                   </div>
                   <div class="field">
                     <label for="cfg-review-tag-color">Review-Tag-Farbe</label>
-                    <input id="cfg-review-tag-color" type="text" placeholder="#7dd3fc">
+                    <div style="display:flex;gap:12px;align-items:center;">
+                      <input id="cfg-review-tag-color-picker" type="color" value="#7dd3fc" style="width:56px;height:44px;padding:4px;">
+                      <input id="cfg-review-tag-color" type="text" placeholder="#7dd3fc">
+                    </div>
                     <small>Eigene Farbe fuer Review-Tags. Hellblau ist als Standard sinnvoll, damit diese Faelle sofort sichtbar sind.</small>
                   </div>
                 </div>
@@ -1067,7 +1081,10 @@ HTML = """<!doctype html>
                   </div>
                   <div class="field">
                     <label for="preview-vision-tag-color">Vision-Tag-Farbe</label>
-                    <input id="preview-vision-tag-color" type="text" placeholder="#d97706">
+                    <div style="display:flex;gap:12px;align-items:center;">
+                      <input id="preview-vision-tag-color-picker" type="color" value="#d97706" style="width:56px;height:44px;padding:4px;">
+                      <input id="preview-vision-tag-color" type="text" placeholder="#d97706">
+                    </div>
                     <small>Hex-Farbe fuer den Vision-Zusatz-Tag, damit Vision-unterstuetzte Dokumente in Paperless sofort erkennbar sind.</small>
                   </div>
                 </div>
@@ -1136,11 +1153,14 @@ HTML = """<!doctype html>
     const cfgMinConfidenceEl = document.getElementById('cfg-min-confidence');
     const cfgTimeoutEl = document.getElementById('cfg-timeout');
     const cfgTagColorEl = document.getElementById('cfg-tag-color');
+    const cfgTagColorPickerEl = document.getElementById('cfg-tag-color-picker');
     const cfgTagReviewModelEl = document.getElementById('cfg-tag-review-model');
     const cfgTagReviewTimeoutEl = document.getElementById('cfg-tag-review-timeout');
+    const cfgTagRulesForceEl = document.getElementById('cfg-tag-rules-force');
     const cfgReviewMinConfidenceEl = document.getElementById('cfg-review-min-confidence');
     const cfgReviewTagNameEl = document.getElementById('cfg-review-tag-name');
     const cfgReviewTagColorEl = document.getElementById('cfg-review-tag-color');
+    const cfgReviewTagColorPickerEl = document.getElementById('cfg-review-tag-color-picker');
     const cfgTagAllowlistsEl = document.getElementById('cfg-tag-allowlists');
     const cfgTagRulesEl = document.getElementById('cfg-tag-rules');
     const saveAiConfigBtn = document.getElementById('save-ai-config');
@@ -1153,6 +1173,7 @@ HTML = """<!doctype html>
     const previewVisionMaxPagesEl = document.getElementById('preview-vision-max-pages');
     const previewVisionTagNameEl = document.getElementById('preview-vision-tag-name');
     const previewVisionTagColorEl = document.getElementById('preview-vision-tag-color');
+    const previewVisionTagColorPickerEl = document.getElementById('preview-vision-tag-color-picker');
     const savePreviewConfigBtn = document.getElementById('save-preview-config');
     const reloadPreviewConfigBtn = document.getElementById('reload-preview-config');
     const previewConfigStatusEl = document.getElementById('preview-config-status');
@@ -1198,6 +1219,9 @@ HTML = """<!doctype html>
     let activeProposal = null;
     let activePreviewJobId = null;
     let availableModelNames = [];
+    const cfgTagColorControl = bindColorInput(cfgTagColorEl, cfgTagColorPickerEl, '#4f6bed');
+    const cfgReviewTagColorControl = bindColorInput(cfgReviewTagColorEl, cfgReviewTagColorPickerEl, '#7dd3fc');
+    const previewVisionTagColorControl = bindColorInput(previewVisionTagColorEl, previewVisionTagColorPickerEl, '#d97706');
 
     function addMessage(role, content) {
       messages.push({ role, content });
@@ -1308,6 +1332,31 @@ HTML = """<!doctype html>
       paperlessFallbackModelEl.disabled = !enabled;
       paperlessFallbackTimeoutOnlyEl.disabled = !enabled;
       paperlessFallbackTimeoutEl.disabled = !enabled;
+    }
+
+    function normalizeHexColor(value, fallback) {
+      const raw = String(value || '').trim();
+      if (/^#[0-9a-fA-F]{6}$/.test(raw)) return raw.toLowerCase();
+      if (/^[0-9a-fA-F]{6}$/.test(raw)) return `#${raw.toLowerCase()}`;
+      return fallback;
+    }
+
+    function bindColorInput(textEl, pickerEl, fallback) {
+      const syncFromText = () => {
+        pickerEl.value = normalizeHexColor(textEl.value, fallback);
+      };
+      const syncFromPicker = () => {
+        textEl.value = pickerEl.value;
+      };
+      textEl.addEventListener('input', syncFromText);
+      pickerEl.addEventListener('input', syncFromPicker);
+      syncFromText();
+      return {
+        set(value) {
+          textEl.value = value || '';
+          syncFromText();
+        }
+      };
     }
 
     function metadataPills(doc) {
@@ -1636,14 +1685,15 @@ HTML = """<!doctype html>
         cfgContentCharsEl.value = data.content_chars || '';
         cfgMinConfidenceEl.value = data.min_confidence || '';
         cfgTimeoutEl.value = data.http_timeout_seconds || '';
-        cfgTagColorEl.value = data.default_tag_color || '';
+        cfgTagColorControl.set(data.default_tag_color || '');
         if (data.tag_review_model && availableModelNames.includes(data.tag_review_model)) {
           cfgTagReviewModelEl.value = data.tag_review_model;
         }
         cfgTagReviewTimeoutEl.value = data.tag_review_timeout_seconds || '';
+        cfgTagRulesForceEl.value = data.tag_rules_force || 'false';
         cfgReviewMinConfidenceEl.value = data.review_min_confidence || '';
         cfgReviewTagNameEl.value = data.review_tag_name || '';
-        cfgReviewTagColorEl.value = data.review_tag_color || '';
+        cfgReviewTagColorControl.set(data.review_tag_color || '');
         cfgTagAllowlistsEl.value = data.tag_allowlists_json || '';
         cfgTagRulesEl.value = data.tag_rules_json || '';
         if (data.model) {
@@ -1679,6 +1729,7 @@ HTML = """<!doctype html>
             default_tag_color: cfgTagColorEl.value.trim(),
             tag_review_model: cfgTagReviewModelEl.value,
             tag_review_timeout_seconds: cfgTagReviewTimeoutEl.value.trim(),
+            tag_rules_force: cfgTagRulesForceEl.value,
             review_min_confidence: cfgReviewMinConfidenceEl.value.trim(),
             review_tag_name: cfgReviewTagNameEl.value.trim(),
             review_tag_color: cfgReviewTagColorEl.value.trim(),
@@ -1714,7 +1765,7 @@ HTML = """<!doctype html>
         previewVisionTimeoutEl.value = data.vision_timeout_seconds || '';
         previewVisionMaxPagesEl.value = data.vision_max_pages || '';
         previewVisionTagNameEl.value = data.vision_tag_name || '';
-        previewVisionTagColorEl.value = data.vision_tag_color || '';
+        previewVisionTagColorControl.set(data.vision_tag_color || '');
         previewConfigStatusEl.textContent = 'Preview-Konfiguration geladen.';
       } catch (err) {
         previewConfigStatusEl.textContent = `Fehler: ${err.message}`;
@@ -2099,6 +2150,7 @@ def read_paperless_config() -> tuple[int, dict]:
         "default_tag_color": env_map.get("PAPERLESS_AI_DEFAULT_TAG_COLOR", ""),
         "tag_review_model": env_map.get("PAPERLESS_AI_TAG_OLLAMA_MODEL", ""),
         "tag_review_timeout_seconds": env_map.get("PAPERLESS_AI_TAG_HTTP_TIMEOUT_SECONDS", ""),
+        "tag_rules_force": env_map.get("PAPERLESS_AI_TAG_RULES_FORCE", "false"),
         "review_min_confidence": env_map.get("PAPERLESS_AI_REVIEW_MIN_CONFIDENCE", "0.8"),
         "review_tag_name": env_map.get("PAPERLESS_AI_REVIEW_TAG_NAME", "KI Nachpruefen"),
         "review_tag_color": env_map.get("PAPERLESS_AI_REVIEW_TAG_COLOR", "#7dd3fc"),
@@ -2148,6 +2200,7 @@ def save_paperless_config(payload: dict) -> tuple[int, dict]:
         "default_tag_color": "PAPERLESS_AI_DEFAULT_TAG_COLOR",
         "tag_review_model": "PAPERLESS_AI_TAG_OLLAMA_MODEL",
         "tag_review_timeout_seconds": "PAPERLESS_AI_TAG_HTTP_TIMEOUT_SECONDS",
+        "tag_rules_force": "PAPERLESS_AI_TAG_RULES_FORCE",
         "review_min_confidence": "PAPERLESS_AI_REVIEW_MIN_CONFIDENCE",
         "review_tag_name": "PAPERLESS_AI_REVIEW_TAG_NAME",
         "review_tag_color": "PAPERLESS_AI_REVIEW_TAG_COLOR",
