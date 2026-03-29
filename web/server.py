@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 import base64
+import html
 import json
 import importlib.util
 import os
@@ -25,6 +26,7 @@ PAPERLESS_BACKFILL = os.getenv("PAPERLESS_BACKFILL", "/opt/paperless/ai_backfill
 PAPERLESS_MODEL_HELPER = os.getenv("PAPERLESS_MODEL_HELPER", "/usr/local/sbin/paperless-set-ollama-model")
 PAPERLESS_AI_HELPER = os.getenv("PAPERLESS_AI_HELPER", "/usr/local/sbin/paperless-ai-admin")
 PREVIEW_CONFIG_PATH = os.getenv("PAPERLESS_PREVIEW_CONFIG_PATH", "/home/thomas/ollama-web/preview_config.json")
+BACKFILL_STATE_PATH = os.getenv("PAPERLESS_BACKFILL_STATE_PATH", "/home/thomas/ollama-web/backfill_jobs.json")
 PADDLEOCR_API_INSTALL_SCRIPT = os.getenv(
     "PADDLEOCR_API_INSTALL_SCRIPT",
     "/home/hytale/paperless-ollama-integration/scripts/install-paddleocr-api.sh",
@@ -913,8 +915,8 @@ HTML = """<!doctype html>
                   Vor dem Start hellblaue Review-Tags entfernen
                   <small>Empfohlen fuer einen kompletten Neuaufbau. Der Lauf startet danach im Hintergrund und kann spaeter weiter verfolgt werden.</small>
                 </label>
-                <div id="backfill-status" class="statusline">Noch kein Lauf gestartet.</div>
-                <div id="backfill-log" class="logbox">Bereit.</div>
+                <div id="backfill-status" class="statusline">__BACKFILL_STATUS__</div>
+                <div id="backfill-log" class="logbox">__BACKFILL_LOG__</div>
               </div>
             </section>
             <section id="control-view" class="view">
@@ -1995,6 +1997,7 @@ HTML = """<!doctype html>
         backfillStatusEl.textContent = 'Noch kein Hintergrund-Job bekannt.';
         backfillStatusEl.className = 'statusline';
         backfillLogEl.textContent = 'Bereit.';
+        backfillLogEl.scrollTop = backfillLogEl.scrollHeight;
         return;
       }
       const prefix = job.document_count ? `${job.document_count} Dokumente` : 'Backfill-Job';
@@ -2023,7 +2026,8 @@ HTML = """<!doctype html>
         lines.push('');
         lines.push(job.tail);
       }
-      backfillLogEl.textContent = lines.join('\n');
+      backfillLogEl.textContent = lines.join('\\n');
+      backfillLogEl.scrollTop = backfillLogEl.scrollHeight;
     }
 
     async function loadBackfillJobStatus(jobId) {
@@ -2086,7 +2090,8 @@ HTML = """<!doctype html>
           `Review-Tag: ${data.tag_name || '-'}`,
           `Betroffene Dokumente: ${data.updated_documents || 0}`,
           data.deleted_tag ? 'Tag-Objekt geloescht: ja' : 'Tag-Objekt geloescht: nein'
-        ].join('\n');
+        ].join('\\n');
+        backfillLogEl.scrollTop = backfillLogEl.scrollHeight;
       } catch (err) {
         backfillStatusEl.textContent = `Fehler beim Entfernen der Review-Tags: ${err.message}`;
         backfillStatusEl.className = 'statusline warn';
@@ -2136,6 +2141,7 @@ HTML = """<!doctype html>
         if (!res.ok) throw new Error(data.error || 'Fehler');
         if (dryRun) {
           backfillLogEl.textContent = data.output || 'Keine Ausgabe';
+          backfillLogEl.scrollTop = backfillLogEl.scrollHeight;
           backfillStatusEl.textContent = 'Vorschau abgeschlossen.';
         } else {
           setBackfillJobState(data.job?.id || null);
@@ -2144,6 +2150,7 @@ HTML = """<!doctype html>
         }
       } catch (err) {
         backfillLogEl.textContent = `Fehler: ${err.message}`;
+        backfillLogEl.scrollTop = backfillLogEl.scrollHeight;
         backfillStatusEl.textContent = 'Fehler beim Backfill.';
         backfillStatusEl.className = 'statusline warn';
       } finally {
@@ -3794,23 +3801,106 @@ def clear_review_tag_assignments() -> tuple[int, dict]:
     return 200, {"tag_name": review_tag_name, "updated_documents": updated, "deleted_tag": deleted_tag}
 
 
+def _save_backfill_state() -> None:
+    payload = {
+        "latest_job_id": BACKFILL_LATEST_JOB_ID,
+        "jobs": BACKFILL_JOBS,
+    }
+    path = Path(BACKFILL_STATE_PATH)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(payload, ensure_ascii=True, indent=2) + "\n", encoding="utf-8")
+
+
+def _load_backfill_state() -> None:
+    global BACKFILL_LATEST_JOB_ID
+    path = Path(BACKFILL_STATE_PATH)
+    if not path.is_file():
+        return
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except Exception:
+        return
+    jobs = payload.get("jobs")
+    latest_job_id = payload.get("latest_job_id")
+    if isinstance(jobs, dict):
+        BACKFILL_JOBS.clear()
+        for key, value in jobs.items():
+            if isinstance(key, str) and isinstance(value, dict):
+                BACKFILL_JOBS[key] = value
+    if isinstance(latest_job_id, str):
+        BACKFILL_LATEST_JOB_ID = latest_job_id
+
+
+def _discover_latest_backfill_job_from_logs() -> dict | None:
+    candidates = sorted(Path("/tmp").glob("paperless-ai-backfill-*.log"), key=lambda p: p.stat().st_mtime, reverse=True)
+    if not candidates:
+        return None
+    log_path = candidates[0]
+    job_id = log_path.stem.replace("paperless-ai-backfill-", "", 1)
+    text = _tail_text_file(str(log_path), max_chars=40000)
+    lines = text.splitlines()
+    started_at = ""
+    document_count = 0
+    status = "running"
+    returncode = None
+    for line in lines:
+        if "Starting job" in line and line.startswith("[") and "]" in line:
+            started_at = line[1:].split("]", 1)[0]
+        if "Selected " in line and " document(s)" in line:
+            match = re.search(r"Selected (\d+) document\(s\)", line)
+            if match:
+                document_count = int(match.group(1))
+        if "Job finished with returncode " in line:
+            match = re.search(r"returncode (-?\d+)", line)
+            if match:
+                returncode = int(match.group(1))
+                status = "done" if returncode == 0 else "error"
+    job = {
+        "id": job_id,
+        "status": status,
+        "started_at": started_at,
+        "log_path": str(log_path),
+        "document_count": document_count,
+    }
+    if returncode is not None:
+        job["returncode"] = returncode
+    return job
+
+
 def store_backfill_job(job_id: str, payload: dict) -> None:
     global BACKFILL_LATEST_JOB_ID
     with BACKFILL_JOBS_LOCK:
         BACKFILL_JOBS[job_id] = payload
         BACKFILL_LATEST_JOB_ID = job_id
+        _save_backfill_state()
 
 
 def read_backfill_job(job_id: str) -> dict | None:
     with BACKFILL_JOBS_LOCK:
+        if not BACKFILL_JOBS:
+            _load_backfill_state()
         return BACKFILL_JOBS.get(job_id)
 
 
 def read_latest_backfill_job() -> dict | None:
     with BACKFILL_JOBS_LOCK:
+        if not BACKFILL_JOBS:
+            _load_backfill_state()
         if not BACKFILL_LATEST_JOB_ID:
+            discovered = _discover_latest_backfill_job_from_logs()
+            if discovered:
+                BACKFILL_JOBS[discovered["id"]] = discovered
+                _save_backfill_state()
+                return discovered
             return None
-        return BACKFILL_JOBS.get(BACKFILL_LATEST_JOB_ID)
+        job = BACKFILL_JOBS.get(BACKFILL_LATEST_JOB_ID)
+        if job is not None:
+            return job
+        discovered = _discover_latest_backfill_job_from_logs()
+        if discovered:
+            BACKFILL_JOBS[discovered["id"]] = discovered
+            return discovered
+        return None
 
 
 def _tail_text_file(path: str, max_chars: int = 12000) -> str:
@@ -3841,6 +3931,45 @@ def read_latest_backfill_job_payload() -> tuple[int, dict]:
     if log_path:
         payload["tail"] = _tail_text_file(str(log_path))
     return 200, payload
+
+
+def render_backfill_bootstrap() -> tuple[str, str]:
+    job = read_latest_backfill_job()
+    if not job:
+        return "Noch kein Lauf gestartet.", "Bereit."
+    status = str(job.get("status") or "unbekannt")
+    job_id = str(job.get("id") or "-")
+    document_count = int(job.get("document_count") or 0)
+    prefix = f"{document_count} Dokumente" if document_count > 0 else "Backfill-Job"
+    if status == "running":
+        status_text = f"{prefix}: Hintergrundlauf aktiv ({job_id})."
+    elif status == "done":
+        status_text = f"{prefix}: abgeschlossen ({job_id})."
+    elif status == "error":
+        status_text = f"{prefix}: Fehler ({job_id})."
+    else:
+        status_text = f"{prefix}: {status} ({job_id})."
+    lines = [f"Job-ID: {job_id}"]
+    if job.get("started_at"):
+        lines.append(f"Gestartet: {job['started_at']}")
+    if job.get("finished_at"):
+        lines.append(f"Beendet: {job['finished_at']}")
+    if job.get("log_path"):
+        lines.append(f"Log: {job['log_path']}")
+    if job.get("clear_summary"):
+        lines.append(f"Vorbereitung: {job['clear_summary']}")
+    tail = _tail_text_file(str(job.get("log_path") or ""))
+    if tail:
+        lines.extend(["", tail])
+    return status_text, "\n".join(lines)
+
+
+def render_html_page() -> bytes:
+    status_text, log_text = render_backfill_bootstrap()
+    page = HTML.replace("__BACKFILL_STATUS__", html.escape(status_text)).replace(
+        "__BACKFILL_LOG__", html.escape(log_text)
+    )
+    return page.encode("utf-8")
 
 
 def build_backfill_command_and_env(payload: dict) -> tuple[list[str], dict[str, str]]:
@@ -3966,7 +4095,7 @@ class Handler(BaseHTTPRequestHandler):
 
     def do_GET(self) -> None:
         if self.path == "/" or self.path == "/index.html":
-            self._send(200, HTML.encode("utf-8"), "text/html; charset=utf-8")
+            self._send(200, render_html_page(), "text/html; charset=utf-8")
             return
         if self.path.startswith("/api/paperless/preview-jobs/"):
             job_id = self.path.rsplit("/", 1)[-1]
