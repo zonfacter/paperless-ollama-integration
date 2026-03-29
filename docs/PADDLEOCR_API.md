@@ -23,6 +23,22 @@ Enthalten:
 - `requirements.txt`
 - `app.py`
 - `docker-compose.example.yml`
+- `run.sh`
+- `smoke-test.sh`
+
+## Schnellstart
+
+```bash
+cd docker/paddleocr-api
+./run.sh
+```
+
+Danach:
+
+```bash
+./smoke-test.sh
+./smoke-test.sh http://127.0.0.1:8091 /path/to/page.jpg
+```
 
 ## API
 
@@ -71,3 +87,4 @@ Die Tests auf der lokalen VM haben gezeigt:
 - Das ist bewusst eine optionale Komponente.
 - Sie ersetzt die bestehende Tesseract-/Paperless-OCR nicht automatisch.
 - Sie ist zunaechst als separater Dienst fuer Vergleich, spaetere Integration und OCR-Experimente gedacht.
+- Fuer eine produktive Nutzung sollte der Container einmal auf dem Zielhost voll gebaut und mit einem echten Seitenbild gegengeprueft werden.
