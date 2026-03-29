@@ -212,6 +212,14 @@ def prompt_for_tags(document: dict, result: dict) -> str:
     document_type = clean_name(str(result.get("document_type", "")))
     reason = truncate_text(str(result.get("reason", "")), 200)
     family = detect_document_family(document, result) or "-"
+    allowed_tags = sorted(load_allowed_tags_by_family().get(family, set()), key=str.casefold) if family != "-" else []
+    family_rules = load_tag_rules_by_family().get(family, {}) if family != "-" else {}
+    allowed_tags_text = ", ".join(allowed_tags) if allowed_tags else "-"
+    if family_rules:
+        rule_lines = [f"- {tag}: {', '.join(keywords)}" for tag, keywords in family_rules.items()]
+        family_rules_text = "\n".join(rule_lines)
+    else:
+        family_rules_text = "-"
     return f"""Du waehlst nur wenige, gute Archiv-Tags fuer paperless-ngx.
 Antworte nur als JSON.
 
@@ -226,6 +234,9 @@ Leitplanken:
 - Dokumentfamilie: {family}
 - Titel: {title or "-"}
 - Einordnung: {reason or "-"}
+- Erlaubte Tags fuer diese Familie: {allowed_tags_text}
+- Regelhinweise fuer diese Familie:
+{family_rules_text}
 
 Regeln:
 - Keine Personen, keine Orte, keine Institutionen als Tags.
@@ -235,6 +246,8 @@ Regeln:
 - Bei medizinischen Dokumenten nur Diagnose, Befund, Behandlung, Attest, Labor, Medikation o. ae., wenn das Hauptthema es traegt.
 - Bei schulischen Schreiben nur den Vorgang oder die Massnahme taggen, nicht die Schule oder beteiligte Personen.
 - Nutze nur Tags, die als Archivkategorie wiederverwendbar sind.
+- Bevorzuge die oben erlaubten Tags.
+- Wenn ein Regelhinweis klar passt, nimm genau diesen Archiv-Tag statt eines freien Synonyms.
 - Wenn unklar, lieber weniger Tags.
 
 Rueckgabeformat:
@@ -488,23 +501,45 @@ def sanitize_result(result: dict) -> dict:
 
 
 def detect_document_family(document: dict, result: dict) -> str:
+    content = str(document.get("content", "") or "")
+    title = str(document.get("title", "") or "")
+    original = str(document.get("original_file_name", "") or "")
+    result_title = str(result.get("title", "") or "")
+    result_type = str(result.get("document_type", "") or "")
+    correspondent = str(result.get("correspondent", "") or "")
+    reason = str(result.get("reason", "") or "")
     haystack = " ".join(
         str(value or "")
         for value in (
-            document.get("content", ""),
-            document.get("title", ""),
-            document.get("original_file_name", ""),
-            result.get("title", ""),
-            result.get("document_type", ""),
-            result.get("correspondent", ""),
-            result.get("reason", ""),
+            content,
+            title,
+            original,
+            result_title,
+            result_type,
+            correspondent,
+            reason,
         )
     ).casefold()
+    header = "\n".join(content.splitlines()[:30]).casefold()
+    correspondent_cf = clean_name(correspondent).casefold()
+    medical_markers = (
+        "gemeinschaftspraxis", "kinder und jugendmedizin", "facharzt", "arzt",
+        "ärzt", "aerzt", "praxis", "klinik", "krankenhaus", "allergologie",
+        "kinder-pneumolog", "kinderarzt", "med."
+    )
+    school_markers = (
+        "schule", "realschule", "gymnasium", "schulleiter", "schulpflicht",
+        "unterricht", "fehlzeiten"
+    )
+    if any(token in correspondent_cf for token in medical_markers) or any(token in header for token in medical_markers):
+        return "medical"
+    if any(token in correspondent_cf for token in school_markers) or any(token in header for token in school_markers):
+        return "school"
     if any(token in haystack for token in ("amtsgericht", "landgericht", "oberlandesgericht", "familiengericht", "beschluss", "pflegschaft", "sofortige beschwerde")):
         return "court"
     if any(token in haystack for token in ("kanzlei", "rechtsanwalt", "rechtsanwält", "rechtsanwaelt", "schriftsatz", "stellungnahme", "gegnerbevollmächtig", "gegnerbevollmaechtig", "strafprozeßvollmacht", "strafprozessvollmacht")):
         return "lawyer"
-    if any(token in haystack for token in ("schule", "realschule", "gymnasium", "schulleiter", "fehltag", "schulpflicht", "attest")):
+    if any(token in haystack for token in ("schule", "realschule", "gymnasium", "schulleiter", "fehltag", "schulpflicht")):
         return "school"
     if any(token in haystack for token in ("arzt", "ärzt", "praxis", "klinik", "krankenhaus", "diagnose", "befund", "attest")):
         return "medical"
@@ -594,6 +629,41 @@ DEFAULT_ALLOWED_TAGS_BY_FAMILY = {
 }
 
 
+DEFAULT_TAG_RULES_BY_FAMILY = {
+    "school": {
+        "Fehlzeiten": ["fehlzeit", "fehlzeiten des schülers", "fehlzeiten des schuelers"],
+        "Schulpflicht": ["schulpflicht", "schulpflichtverletzung"],
+        "Attest": ["attest", "ärzt", "aerzt"],
+    },
+    "court": {
+        "Beschluss": ["beschluss"],
+        "Pflegschaft": ["pflegschaft"],
+        "Familienrecht": ["familiengericht", "familienrecht", "16 f "],
+        "Unterhalt": ["unterhalt"],
+    },
+    "medical": {
+        "Attest": ["attest", "ärztliche bescheinigung", "aerztliche bescheinigung"],
+        "Kinderarzt": ["kinderarzt", "kinder und jugendmedizin"],
+        "Befund": ["befund"],
+        "Diagnose": ["diagnose"],
+    },
+    "tax": {
+        "Einkommensteuer": ["einkommensteuer"],
+        "Umsatzsteuer": ["umsatzsteuer"],
+        "Steuerbescheid": ["steuerbescheid"],
+        "Steuererklärung": ["steuererklärung", "steuererklaerung"],
+        "ELSTER": ["elster"],
+    },
+    "lawyer": {
+        "Familienrecht": ["familienrecht"],
+        "Unterhalt": ["unterhalt"],
+        "Umgangsrecht": ["umgang"],
+        "Sorgerecht": ["sorgerecht"],
+        "Schriftsatz": ["schriftsatz"],
+    },
+}
+
+
 def load_allowed_tags_by_family() -> dict[str, set[str]]:
     raw_b64 = env("PAPERLESS_AI_TAG_ALLOWLISTS_B64", "")
     source = DEFAULT_ALLOWED_TAGS_BY_FAMILY
@@ -619,6 +689,39 @@ def default_allowed_tags_by_family_json() -> str:
     return json.dumps(serializable, indent=2, ensure_ascii=False)
 
 
+def load_tag_rules_by_family() -> dict[str, dict[str, list[str]]]:
+    raw_b64 = env("PAPERLESS_AI_TAG_RULES_B64", "")
+    source = DEFAULT_TAG_RULES_BY_FAMILY
+    if raw_b64:
+        try:
+            decoded = base64.b64decode(raw_b64).decode("utf-8")
+            parsed = json.loads(decoded)
+            if isinstance(parsed, dict):
+                normalized: dict[str, dict[str, list[str]]] = {}
+                for family, rules in parsed.items():
+                    if not isinstance(rules, dict):
+                        continue
+                    family_rules: dict[str, list[str]] = {}
+                    for tag_name, keywords in rules.items():
+                        cleaned_tag = clean_name(str(tag_name))
+                        if not cleaned_tag or not isinstance(keywords, list):
+                            continue
+                        cleaned_keywords = [clean_name(str(keyword)).casefold() for keyword in keywords if clean_name(str(keyword))]
+                        if cleaned_keywords:
+                            family_rules[cleaned_tag] = cleaned_keywords
+                    if family_rules:
+                        normalized[str(family)] = family_rules
+                if normalized:
+                    source = normalized
+        except Exception as exc:
+            warn(f"Could not parse PAPERLESS_AI_TAG_RULES_B64, using defaults: {exc}")
+    return source
+
+
+def default_tag_rules_by_family_json() -> str:
+    return json.dumps(DEFAULT_TAG_RULES_BY_FAMILY, indent=2, ensure_ascii=False)
+
+
 def refine_tags(result: dict, document: dict) -> list[str]:
     family = detect_document_family(document, result)
     correspondent = clean_name(str(result.get("correspondent", ""))).casefold()
@@ -639,7 +742,7 @@ def refine_tags(result: dict, document: dict) -> list[str]:
             continue
         if document_type and (key == document_type or key in document_type):
             continue
-        if title and len(key) > 5 and key in title:
+        if title and len(key) > 5 and key in title and family not in {"school", "court", "medical", "tax", "lawyer"}:
             continue
         if re.fullmatch(r"\d{4}", tag):
             continue
@@ -664,9 +767,30 @@ def refine_tags(result: dict, document: dict) -> list[str]:
     return refined[:6]
 
 
+def fallback_tags_for_family(result: dict, document: dict) -> list[str]:
+    family = detect_document_family(document, result)
+    content = " ".join(
+        str(value or "")
+        for value in (
+            document.get("content", ""),
+            result.get("title", ""),
+            result.get("document_type", ""),
+            result.get("reason", ""),
+        )
+    ).casefold()
+    rules = load_tag_rules_by_family().get(family, {})
+    tags: list[str] = []
+    for tag_name, keywords in rules.items():
+        if any(keyword in content for keyword in keywords):
+            tags.append(tag_name)
+    return tags[:3]
+
+
 def refine_result(result: dict, document: dict) -> dict:
     refined = dict(result)
     refined["tags"] = refine_tags(refined, document)
+    if not refined["tags"]:
+        refined["tags"] = refine_tags({**refined, "tags": fallback_tags_for_family(refined, document)}, document)
     return refined
 
 
@@ -693,6 +817,56 @@ def sanitize_tag_result(result: dict | list | None) -> list[str]:
     return clean_tags[:3]
 
 
+def merge_tag_candidates(primary: list[str], secondary: list[str], limit: int = 3) -> list[str]:
+    merged: list[str] = []
+    seen: set[str] = set()
+    for source in (primary, secondary):
+        for item in source:
+            tag = clean_name(str(item))
+            if not tag:
+                continue
+            key = tag.casefold()
+            if key in seen:
+                continue
+            seen.add(key)
+            merged.append(tag)
+            if len(merged) >= limit:
+                return merged
+    return merged
+
+
+def assess_review_flags(result: dict, document: dict) -> tuple[bool, list[str]]:
+    reasons: list[str] = []
+    family = detect_document_family(document, result)
+    confidence_value = result.get("confidence")
+    threshold = float(env("PAPERLESS_AI_REVIEW_MIN_CONFIDENCE", "0.8"))
+    try:
+        confidence = float(confidence_value) if confidence_value is not None else 1.0
+    except (TypeError, ValueError):
+        confidence = 1.0
+    if confidence < threshold:
+        reasons.append(f"confidence<{threshold}")
+    tags = [clean_name(str(tag)) for tag in result.get("tags", []) if clean_name(str(tag))]
+    if not tags:
+        reasons.append("tags_missing")
+    elif family == "school" and tags == ["Attest"]:
+        reasons.append("school_tags_too_narrow")
+    elif family == "court" and tags == ["Beschluss"]:
+        reasons.append("court_tags_too_narrow")
+    title = clean_name(str(result.get("title", ""))).casefold()
+    document_type = clean_name(str(result.get("document_type", ""))).casefold()
+    if family == "school" and "ärztliche bescheinigung" in document_type:
+        reasons.append("school_doc_type_mismatch")
+    if family == "medical" and title.startswith("schule:"):
+        reasons.append("medical_title_mismatch")
+    if not clean_name(str(result.get("correspondent", ""))):
+        reasons.append("correspondent_missing")
+    if not clean_name(str(result.get("document_type", ""))):
+        reasons.append("document_type_missing")
+    needed = env("PAPERLESS_AI_REVIEW_TAG_ENABLED", "true").lower() in ("1", "true", "yes", "on") and bool(reasons)
+    return needed, reasons
+
+
 def apply_tag_review(document: dict, result: dict) -> tuple[dict, dict]:
     review_enabled = env("PAPERLESS_AI_TAG_REVIEW_ENABLED", "true").lower() in ("1", "true", "yes", "on")
     if not review_enabled:
@@ -712,7 +886,10 @@ def apply_tag_review(document: dict, result: dict) -> tuple[dict, dict]:
         fallback_enabled_override=fallback_enabled,
     )
     reviewed = dict(result)
-    reviewed["tags"] = sanitize_tag_result(raw_tags)
+    reviewed["tags"] = merge_tag_candidates(
+        fallback_tags_for_family(result, document),
+        sanitize_tag_result(raw_tags),
+    )
     reviewed = refine_result(reviewed, document)
     meta["enabled"] = True
     return reviewed, meta
@@ -761,6 +938,9 @@ def main() -> int:
         result, tag_meta = apply_tag_review(document, result)
     except Exception as exc:
         warn(f"Tag review failed for document {document_id}: {exc}")
+    review_needed, review_reasons = assess_review_flags(result, document)
+    result["_review_needed"] = review_needed
+    result["_review_reasons"] = review_reasons
     duration = round(time.time() - started, 2)
     model_info = response_meta.get("model", "-")
     if response_meta.get("fallback_used"):
@@ -796,6 +976,15 @@ def main() -> int:
     for tag_id in resolve_tag_ids(client, result["tags"], document.get("content") or ""):
         if tag_id is not None and tag_id not in combined_tag_ids:
             combined_tag_ids.append(tag_id)
+    if review_needed:
+        review_tag_id = ensure_named_object(
+            client,
+            "/api/tags/",
+            env("PAPERLESS_AI_REVIEW_TAG_NAME", "KI Nachpruefen"),
+            {"color": env("PAPERLESS_AI_REVIEW_TAG_COLOR", "#7dd3fc")},
+        )
+        if review_tag_id is not None and review_tag_id not in combined_tag_ids:
+            combined_tag_ids.append(review_tag_id)
     if combined_tag_ids != current_tag_ids:
         payload["tags"] = combined_tag_ids
 
@@ -810,7 +999,8 @@ def main() -> int:
         f"title={payload.get('title', '-')}, "
         f"correspondent={result['correspondent'] or '-'}, "
         f"document_type={result['document_type'] or '-'}, "
-        f"tags={','.join(result['tags']) or '-'}"
+        f"tags={','.join(result['tags']) or '-'}, "
+        f"review={'yes' if review_needed else 'no'}"
     )
     return 0
 

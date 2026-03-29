@@ -987,11 +987,31 @@ HTML = """<!doctype html>
                     <input id="cfg-tag-review-timeout" type="number" min="30" step="30">
                     <small>Wie lange das Tag-Modell maximal laufen darf. Das betrifft nur die Tag-Endauswahl.</small>
                   </div>
+                  <div class="field">
+                    <label for="cfg-review-min-confidence">Review-Tag unter Confidence</label>
+                    <input id="cfg-review-min-confidence" type="number" min="0" max="1" step="0.05">
+                    <small>Unterhalb dieses Werts markiert die Pipeline das Dokument zusaetzlich fuer Nachpruefung.</small>
+                  </div>
+                  <div class="field">
+                    <label for="cfg-review-tag-name">Review-Tag</label>
+                    <input id="cfg-review-tag-name" type="text" placeholder="KI Nachpruefen">
+                    <small>Dieses Tag markiert unsichere Faelle fuer spaetere manuelle oder teurere Zweitpruefung.</small>
+                  </div>
+                  <div class="field">
+                    <label for="cfg-review-tag-color">Review-Tag-Farbe</label>
+                    <input id="cfg-review-tag-color" type="text" placeholder="#7dd3fc">
+                    <small>Eigene Farbe fuer Review-Tags. Hellblau ist als Standard sinnvoll, damit diese Faelle sofort sichtbar sind.</small>
+                  </div>
                 </div>
                 <div class="field">
                   <label for="cfg-tag-allowlists">Erlaubte Tags je Familie (JSON)</label>
                   <textarea id="cfg-tag-allowlists" class="prompt-box" style="min-height:220px" placeholder='{"school":["Fehlzeiten","Schulpflicht","Attest"],"court":["Familienrecht","Pflegschaft"]}'></textarea>
                   <small>Nur generische Archiv-Tags eintragen. Keine persoenlichen Namen, Orte oder Einzelfall-Tags. Diese Liste bleibt lokal auf deinem System.</small>
+                </div>
+                <div class="field">
+                  <label for="cfg-tag-rules">Regelbasierte Fallback-Tags je Familie (JSON)</label>
+                  <textarea id="cfg-tag-rules" class="prompt-box" style="min-height:240px" placeholder='{"school":{"Fehlzeiten":["fehlzeit"],"Schulpflicht":["schulpflicht"],"Attest":["attest","ärzt"]}}'></textarea>
+                  <small>Verstaendliche Pipeline-Regeln: Familie -> Tag -> Suchbegriffe. Diese Regeln greifen, wenn das Tag-Modell zu wenig oder nichts Brauchbares liefert.</small>
                 </div>
                 <div class="actions">
                   <button id="save-ai-config">KI-Konfiguration speichern</button>
@@ -1118,7 +1138,11 @@ HTML = """<!doctype html>
     const cfgTagColorEl = document.getElementById('cfg-tag-color');
     const cfgTagReviewModelEl = document.getElementById('cfg-tag-review-model');
     const cfgTagReviewTimeoutEl = document.getElementById('cfg-tag-review-timeout');
+    const cfgReviewMinConfidenceEl = document.getElementById('cfg-review-min-confidence');
+    const cfgReviewTagNameEl = document.getElementById('cfg-review-tag-name');
+    const cfgReviewTagColorEl = document.getElementById('cfg-review-tag-color');
     const cfgTagAllowlistsEl = document.getElementById('cfg-tag-allowlists');
+    const cfgTagRulesEl = document.getElementById('cfg-tag-rules');
     const saveAiConfigBtn = document.getElementById('save-ai-config');
     const reloadAiConfigBtn = document.getElementById('reload-ai-config');
     const aiConfigStatusEl = document.getElementById('ai-config-status');
@@ -1395,6 +1419,8 @@ HTML = """<!doctype html>
         <div class="meta-row"><div class="meta-label">OCR-Modell</div><div>${formatValue(proposal._ocr_model || proposal._model)}</div></div>
         <div class="meta-row"><div class="meta-label">Vision-Modell</div><div>${proposal._vision_used ? formatValue(proposal._vision_model) : '-'}</div></div>
         <div class="meta-row"><div class="meta-label">Vision</div><div>${proposal._vision_used ? `ja, ${proposal._vision_pages || 0} Seite(n)` : proposal._hybrid_pending ? 'laeuft' : proposal._vision_requested ? 'angefragt' : 'nein'}</div></div>
+        <div class="meta-row"><div class="meta-label">Review</div><div>${proposal._review_needed ? 'ja' : 'nein'}</div></div>
+        <div class="meta-row"><div class="meta-label">Review-Gruende</div><div>${formatValue(proposal._review_reasons)}</div></div>
       `;
       docProposalReasonEl.textContent = proposal.reason || '-';
       if (proposal._vision_error) {
@@ -1615,7 +1641,11 @@ HTML = """<!doctype html>
           cfgTagReviewModelEl.value = data.tag_review_model;
         }
         cfgTagReviewTimeoutEl.value = data.tag_review_timeout_seconds || '';
+        cfgReviewMinConfidenceEl.value = data.review_min_confidence || '';
+        cfgReviewTagNameEl.value = data.review_tag_name || '';
+        cfgReviewTagColorEl.value = data.review_tag_color || '';
         cfgTagAllowlistsEl.value = data.tag_allowlists_json || '';
+        cfgTagRulesEl.value = data.tag_rules_json || '';
         if (data.model) {
           paperlessModelEl.value = data.model;
         }
@@ -1649,7 +1679,11 @@ HTML = """<!doctype html>
             default_tag_color: cfgTagColorEl.value.trim(),
             tag_review_model: cfgTagReviewModelEl.value,
             tag_review_timeout_seconds: cfgTagReviewTimeoutEl.value.trim(),
-            tag_allowlists_json: cfgTagAllowlistsEl.value
+            review_min_confidence: cfgReviewMinConfidenceEl.value.trim(),
+            review_tag_name: cfgReviewTagNameEl.value.trim(),
+            review_tag_color: cfgReviewTagColorEl.value.trim(),
+            tag_allowlists_json: cfgTagAllowlistsEl.value,
+            tag_rules_json: cfgTagRulesEl.value
           })
         });
         const data = await res.json();
@@ -2008,12 +2042,19 @@ def load_hook_module(hook_path: str = "/opt/paperless/ai_enrich.py"):
 def read_paperless_config() -> tuple[int, dict]:
     env_map = load_paperless_env()
     tag_allowlists_json = ""
+    tag_rules_json = ""
     raw_b64 = env_map.get("PAPERLESS_AI_TAG_ALLOWLISTS_B64", "")
     if raw_b64:
         try:
             tag_allowlists_json = base64.b64decode(raw_b64).decode("utf-8")
         except Exception:
             tag_allowlists_json = ""
+    raw_rules_b64 = env_map.get("PAPERLESS_AI_TAG_RULES_B64", "")
+    if raw_rules_b64:
+        try:
+            tag_rules_json = base64.b64decode(raw_rules_b64).decode("utf-8")
+        except Exception:
+            tag_rules_json = ""
     if not tag_allowlists_json:
         try:
             module = load_hook_module()
@@ -2030,6 +2071,22 @@ def read_paperless_config() -> tuple[int, dict]:
                 ensure_ascii=False,
                 indent=2,
             )
+    if not tag_rules_json:
+        try:
+            module = load_hook_module()
+            tag_rules_json = module.default_tag_rules_by_family_json()
+        except Exception:
+            tag_rules_json = json.dumps(
+                {
+                    "school": {"Fehlzeiten": ["fehlzeit"], "Schulpflicht": ["schulpflicht"], "Attest": ["attest", "ärzt", "aerzt"]},
+                    "court": {"Beschluss": ["beschluss"], "Pflegschaft": ["pflegschaft"], "Familienrecht": ["familiengericht", "familienrecht"]},
+                    "medical": {"Attest": ["attest", "ärztliche bescheinigung"], "Kinderarzt": ["kinderarzt", "kinder und jugendmedizin"]},
+                    "tax": {"Einkommensteuer": ["einkommensteuer"], "Steuerbescheid": ["steuerbescheid"], "ELSTER": ["elster"]},
+                    "lawyer": {"Familienrecht": ["familienrecht"], "Unterhalt": ["unterhalt"], "Schriftsatz": ["schriftsatz"]},
+                },
+                ensure_ascii=False,
+                indent=2,
+            )
     return 200, {
         "model": env_map.get("PAPERLESS_AI_OLLAMA_MODEL", ""),
         "fallback_enabled": env_map.get("PAPERLESS_AI_FALLBACK_ENABLED", "false"),
@@ -2042,7 +2099,11 @@ def read_paperless_config() -> tuple[int, dict]:
         "default_tag_color": env_map.get("PAPERLESS_AI_DEFAULT_TAG_COLOR", ""),
         "tag_review_model": env_map.get("PAPERLESS_AI_TAG_OLLAMA_MODEL", ""),
         "tag_review_timeout_seconds": env_map.get("PAPERLESS_AI_TAG_HTTP_TIMEOUT_SECONDS", ""),
+        "review_min_confidence": env_map.get("PAPERLESS_AI_REVIEW_MIN_CONFIDENCE", "0.8"),
+        "review_tag_name": env_map.get("PAPERLESS_AI_REVIEW_TAG_NAME", "KI Nachpruefen"),
+        "review_tag_color": env_map.get("PAPERLESS_AI_REVIEW_TAG_COLOR", "#7dd3fc"),
         "tag_allowlists_json": tag_allowlists_json,
+        "tag_rules_json": tag_rules_json,
     }
 
 
@@ -2087,6 +2148,9 @@ def save_paperless_config(payload: dict) -> tuple[int, dict]:
         "default_tag_color": "PAPERLESS_AI_DEFAULT_TAG_COLOR",
         "tag_review_model": "PAPERLESS_AI_TAG_OLLAMA_MODEL",
         "tag_review_timeout_seconds": "PAPERLESS_AI_TAG_HTTP_TIMEOUT_SECONDS",
+        "review_min_confidence": "PAPERLESS_AI_REVIEW_MIN_CONFIDENCE",
+        "review_tag_name": "PAPERLESS_AI_REVIEW_TAG_NAME",
+        "review_tag_color": "PAPERLESS_AI_REVIEW_TAG_COLOR",
     }
     for field, key in allowed.items():
         value = str(payload.get(field, "")).strip()
@@ -2105,6 +2169,18 @@ def save_paperless_config(payload: dict) -> tuple[int, dict]:
             return 400, {"error": f"Ungueltiges Tag-Allowlist-JSON: {exc}"}
         encoded = base64.b64encode(tag_allowlists_json.encode("utf-8")).decode("ascii")
         status, response = call_ai_helper(["set-config", "PAPERLESS_AI_TAG_ALLOWLISTS_B64", encoded])
+        if status != 200:
+            return status, response
+    tag_rules_json = str(payload.get("tag_rules_json", "")).strip()
+    if tag_rules_json:
+        try:
+            parsed = json.loads(tag_rules_json)
+            if not isinstance(parsed, dict):
+                return 400, {"error": "Tag-Regeln muessen ein JSON-Objekt sein"}
+        except Exception as exc:
+            return 400, {"error": f"Ungueltiges Tag-Regel-JSON: {exc}"}
+        encoded = base64.b64encode(tag_rules_json.encode("utf-8")).decode("ascii")
+        status, response = call_ai_helper(["set-config", "PAPERLESS_AI_TAG_RULES_B64", encoded])
         if status != 200:
             return status, response
     status, response = call_ai_helper(["restart-workers"])
@@ -2490,6 +2566,9 @@ def derive_document_hints(ocr_view: dict) -> dict:
 
 
 def detect_document_family(document_hints: dict, proposal: dict) -> str:
+    sender = str(document_hints.get("sender", "") or "").casefold()
+    signer = str(document_hints.get("signer", "") or "").casefold()
+    subject = str(document_hints.get("subject", "") or "").casefold()
     haystack = " ".join(
         str(value or "")
         for value in (
@@ -2501,9 +2580,24 @@ def detect_document_family(document_hints: dict, proposal: dict) -> str:
             proposal.get("reason", ""),
         )
     ).casefold()
+    medical_markers = (
+        "gemeinschaftspraxis", "kinder und jugendmedizin", "facharzt", "arzt",
+        "ärzt", "aerzt", "praxis", "klinik", "krankenhaus", "allergologie",
+        "kinder-pneumolog", "kinderarzt", "medizin"
+    )
+    school_markers = (
+        "schule", "realschule", "gymnasium", "schulleiter", "schulpflicht",
+        "unterricht", "fehlzeiten"
+    )
+    if any(token in sender or token in signer for token in medical_markers):
+        return "medical"
+    if any(token in sender or token in signer for token in school_markers):
+        return "school"
     if any(token in haystack for token in ("gericht", "beschluss", "sofortige beschwerde", "familiengericht", "amtsgericht", "landgericht", "oberlandesgericht")):
         return "court"
-    if any(token in haystack for token in ("schule", "realschule", "gymnasium", "schul", "schulleiter", "fehltag", "attest")):
+    if any(token in subject for token in medical_markers):
+        return "medical"
+    if any(token in haystack for token in ("schule", "realschule", "gymnasium", "schul", "schulleiter", "fehltag")):
         return "school"
     if any(token in haystack for token in ("arzt", "ärzt", "praxis", "klinik", "krankenhaus", "medizin", "attest")):
         return "medical"
@@ -2551,6 +2645,8 @@ def build_domain_title(document_hints: dict, proposal: dict) -> str:
     if family == "medical":
         if doc_type:
             return f"Medizin: {doc_type}"
+        if subject and any(token in subject.casefold() for token in ("ärzt", "aerzt", "attest", "bescheinigung")):
+            return f"Medizin: {subject}"
         if subject:
             return f"Medizin: {subject}"
         return f"Medizin: {sender}" if sender else ""
@@ -2867,6 +2963,9 @@ def run_hybrid_vision_review(job_id: str, document: dict, proposal: dict, existi
         except Exception as exc:
             merged["_tag_model"] = ""
             merged["_tag_review_error"] = str(exc)
+        review_needed, review_reasons = module.assess_review_flags(merged, document)
+        merged["_review_needed"] = review_needed
+        merged["_review_reasons"] = review_reasons
         merged["_model"] = proposal.get("_model", "")
         merged["_ocr_model"] = proposal.get("_ocr_model", proposal.get("_model", ""))
         merged["_fallback_used"] = bool(proposal.get("_fallback_used"))
@@ -3018,6 +3117,9 @@ def build_ai_preview(document_id: int, use_vision: bool = False) -> tuple[int, d
     except Exception as exc:
         proposal["_tag_model"] = ""
         proposal["_tag_review_error"] = str(exc)
+    review_needed, review_reasons = module.assess_review_flags(proposal, document)
+    proposal["_review_needed"] = review_needed
+    proposal["_review_reasons"] = review_reasons
     proposal["_model"] = response_meta.get("model", "")
     proposal["_ocr_model"] = response_meta.get("model", "")
     proposal["_fallback_used"] = bool(response_meta.get("fallback_used"))
@@ -3080,6 +3182,9 @@ def apply_ai_preview(document_id: int, proposal: dict) -> tuple[int, dict]:
         result, _ = module.apply_tag_review(document, result)
     except Exception:
         pass
+    review_needed, review_reasons = module.assess_review_flags(result, document)
+    result["_review_needed"] = review_needed
+    result["_review_reasons"] = review_reasons
     if not module.should_apply(result):
         return 400, {"error": "Proposal confidence below threshold"}
     payload: dict = {}
@@ -3103,6 +3208,15 @@ def apply_ai_preview(document_id: int, proposal: dict) -> tuple[int, dict]:
     for tag_id in module.resolve_tag_ids(client, result["tags"], document.get("content") or ""):
         if tag_id not in combined_tag_ids:
             combined_tag_ids.append(tag_id)
+    if result.get("_review_needed"):
+        review_tag_id = module.ensure_named_object(
+            client,
+            "/api/tags/",
+            paperless_env.get("PAPERLESS_AI_REVIEW_TAG_NAME", "KI Nachpruefen"),
+            {"color": paperless_env.get("PAPERLESS_AI_REVIEW_TAG_COLOR", "#7dd3fc")},
+        )
+        if review_tag_id is not None and review_tag_id not in combined_tag_ids:
+            combined_tag_ids.append(review_tag_id)
     if proposal.get("_vision_used"):
         vision_tag_id = module.ensure_named_object(
             client,
