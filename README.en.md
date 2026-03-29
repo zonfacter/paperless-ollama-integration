@@ -155,6 +155,34 @@ The installer:
 - asynchronous hybrid preview with OCR first and optional vision follow-up
 - separate web configuration for preview OCR model, vision model, page limit, and vision tagging
 
+## Tested Model Integration
+
+This project can cleanly wire multiple local AI models into the same hook, preview, and review pipeline.
+
+Different models can be assigned independently to:
+
+- the normal Paperless hook
+- preview OCR
+- vision review
+- tag review
+
+Successfully integrated and exercised through the same local path were, among others:
+
+- `qwen3.5:4b`
+- `qwen3.5:9b`
+- `qwen2.5:7b-instruct`
+- `qwen2.5:14b-instruct`
+- `glm-ocr`
+- `glm-ocr:q8_0`
+- `gemma3:4b`
+- `qwen3-vl:4b`
+- `openbmb/minicpm-v2.5:q4_K_S`
+
+The key takeaway is:
+
+- the technical integration works
+- practical usability depends heavily on runtime on the target hardware
+
 ## OCR Notes
 
 For real scan PDFs, `PAPERLESS_OCR_MODE=force` proved more robust than `redo` in this project once cleanup options such as `clean`, `deskew`, and `rotate-pages` were enabled together.
@@ -176,6 +204,34 @@ It also needs the standard Tesseract support files:
 - `pdf.ttf`
 
 A language-only directory without those files can cause OCRmyPDF to fail when requesting `hocr` and `txt` output.
+
+## Findings From Vision And OCR Model Testing On CPU VMs
+
+The most important practical findings from the model tests are:
+
+- small to mid-sized text models remain the most usable default for this architecture
+- pure text pipelines with OCR cleanup, structure extraction, and rule-based post-processing are much more reliable locally than full multimodal image+OCR prompts
+- small vision/OCR models integrated cleanly, but were still often too slow on the tested CPU-only VM for interactive or synchronous review
+- a smaller multimodal model does not automatically mean an acceptable document runtime
+
+This project therefore documents two separate layers:
+
+- practical on local CPU:
+  - `paperless-ngx` OCR
+  - OCR cleanup
+  - OCR structure extraction
+  - rule-based post-processing
+  - text models for title, correspondent, document type, and tags
+- practical later or on stronger hardware:
+  - dedicated vision/OCR models for rendered document pages
+  - GPU passthrough
+  - external or cloud-backed review stages
+
+In short:
+
+- the integration path for vision/OCR models works
+- the CPU VM is the limiting factor
+- the default architecture in this repository therefore stays OCR- and text-centric
 
 ## Documentation
 

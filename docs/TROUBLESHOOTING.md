@@ -110,3 +110,23 @@ curl -sS http://127.0.0.1:11434/api/chat -d '{
   ]
 }'
 ```
+
+## OCR-/Vision-Modell ist korrekt angebunden, aber trotzdem unbrauchbar langsam
+
+Typische Ursachen:
+
+- CPU-only VM
+- Bild + OCR-Kontext werden zusammen an ein multimodales Modell gesendet
+- der Testpfad ist technisch korrekt, aber fuer interaktive Laufzeiten zu schwer
+
+Typische Beobachtung:
+
+- Modell laesst sich ziehen und antwortet grundsaetzlich
+- der kombinierte Dokumenttest laeuft trotzdem in Timeouts
+
+Pragmatische Loesung:
+
+- textbasierten OCR-/Strukturpfad als produktiven Default beibehalten
+- Vision nur fuer kurze PDFs oder seltene Review-Faelle aktivieren
+- kleinere OCR-Kontexte fuer Vision-Tests verwenden
+- staerkere Vision-/OCR-Modelle erst mit GPU-Passthrough oder externer Rechenleistung erneut bewerten

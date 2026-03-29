@@ -115,6 +115,23 @@ Ablauf:
 - bewusst begrenzte Vision
   - ueber `Vision nur bis Seitenzahl` werden laengere Dokumente automatisch bei OCR-only belassen
 
+## Externe OCR- und Vision-Modelle
+
+Die Weboberflaeche ist nicht auf ein einzelnes Modell fest verdrahtet. Sie kann dieselbe Dokumentvorschau mit unterschiedlichen lokalen `Ollama`-Modellen fahren.
+
+Wichtig:
+
+- die technische Anbindung zusaetzlicher OCR-/Vision-Modelle funktioniert ueber denselben Vorschaupfad
+- Modelle koennen getrennt fuer Vorschau-OCR, Vision-Review und Tag-Review konfiguriert werden
+- Modellvergleiche lassen sich dadurch in derselben UI fahren, ohne den produktiven Hook umzubauen
+
+Die praktischen Tests auf einer CPU-VM fuehrten aber zu einer klaren Produktentscheidung:
+
+- die Anbindung von Modellen wie `glm-ocr`, `gemma3:4b`, `qwen3-vl:4b` oder `openbmb/minicpm-v2.5:q4_K_S` funktionierte technisch
+- derselbe Pfad war fuer interaktive Bild+OCR-Tests auf CPU oft zu langsam
+- deshalb bleibt die UI standardmaessig auf textbasierte Review-Stufen ausgerichtet
+- Vision wird als optionaler, bewusst begrenzter Zusatzpfad behandelt, nicht als Default fuer jedes Dokument
+
 ## Sichtbarkeit In Paperless
 
 Wenn ein Vorschlag mit erfolgreicher Vision-Nachpruefung uebernommen wird, kann die UI zusaetzlich einen eigenen Tag setzen:

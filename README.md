@@ -155,6 +155,34 @@ Der Installer:
 - asynchrone Hybrid-Vorschau mit OCR-Entwurf und optionaler Vision-Nachpruefung
 - getrennte Web-Konfiguration fuer Vorschau-OCR-Modell, Vision-Modell, Seitenlimit und Vision-Tag
 
+## Getestete Modellanbindung
+
+Die Anbindung mehrerer lokaler KI-Modelle an Hook, Vorschau und Review funktioniert in diesem Projekt grundsaetzlich sauber.
+
+Moeglich sind getrennte Modelle fuer:
+
+- normalen Paperless-Hook
+- Vorschau-OCR
+- Vision-Review
+- Tag-Review
+
+Praktisch erfolgreich angebunden und ueber denselben Integrationspfad getestet wurden unter anderem:
+
+- `qwen3.5:4b`
+- `qwen3.5:9b`
+- `qwen2.5:7b-instruct`
+- `qwen2.5:14b-instruct`
+- `glm-ocr`
+- `glm-ocr:q8_0`
+- `gemma3:4b`
+- `qwen3-vl:4b`
+- `openbmb/minicpm-v2.5:q4_K_S`
+
+Die entscheidende Erkenntnis daraus:
+
+- die technische Anbindung funktioniert
+- die praktische Nutzbarkeit haengt stark von der Laufzeit auf der Zielhardware ab
+
 ## OCR-Hinweise
 
 Fuer echte Scan-PDFs hat sich in diesem Projekt `PAPERLESS_OCR_MODE=force` als robuster erwiesen als `redo`, sobald zusaetzlich Bereinigung wie `clean`, `deskew` und `rotate-pages` aktiv sein soll.
@@ -175,6 +203,34 @@ Wenn `tessdata_best` genutzt wird, muessen neben den `.traineddata`-Dateien auch
 - `pdf.ttf`
 
 Ein reiner Sprachdaten-Ordner ohne diese Dateien kann OCRmyPDF bei `hocr`- und `txt`-Ausgaben scheitern lassen.
+
+## Erkenntnisse Zu Vision- und OCR-Modellen Auf CPU-VMs
+
+Die wichtigsten praktischen Erkenntnisse aus den Modelltests:
+
+- kleine bis mittlere Textmodelle bleiben fuer diese Architektur am alltagstauglichsten
+- reine Textpfade mit OCR-Bereinigung, Strukturierung und Regeln funktionieren lokal deutlich robuster als voll multimodale Bild+OCR-Prompts
+- kleine Vision-/OCR-Modelle liessen sich technisch problemlos anbinden, waren auf der getesteten CPU-VM aber dennoch oft zu langsam fuer interaktive oder synchrone Review-Pfade
+- ein kleineres multimodales Modell bedeutet nicht automatisch eine brauchbare Dokumentlaufzeit
+
+Dieses Projekt dokumentiert deshalb bewusst zwei Ebenen:
+
+- lokal sinnvoll auf CPU:
+  - `paperless-ngx` OCR
+  - OCR-Bereinigung
+  - OCR-Strukturierung
+  - regelbasierte Nachlogik
+  - Textmodelle fuer Titel, Korrespondenz, Dokumenttyp und Tags
+- spaeter oder auf staerkerer Hardware sinnvoll:
+  - dedizierte Vision-/OCR-Modelle fuer Seitenbilder
+  - GPU-Passthrough
+  - externer oder Cloud-basierter Review-Schritt
+
+Kurz gesagt:
+
+- die Integration von Vision-/OCR-Modellen funktioniert
+- die CPU-VM ist der begrenzende Faktor
+- deshalb bleibt die Default-Architektur dieses Projekts text- und OCR-zentriert
 
 ## Dokumentation
 

@@ -1,5 +1,15 @@
 # Changelog
 
+## 2026-03-29
+
+### OCR And Vision Model Evaluation
+
+- dokumentiert, dass die Anbindung mehrerer zusaetzlicher OCR-/Vision-Modelle an denselben lokalen Review-Pfad technisch funktioniert
+- Readmes, Architektur- und Web-UI-Dokumentation um die Erkenntnis erweitert, dass Integration und Laufzeit auf CPU-VMs getrennt bewertet werden muessen
+- festgehalten, dass lokal erfolgreich angebundene Modelle je nach Host trotzdem fuer multimodale Dokumentprompts in Timeouts laufen koennen
+- die Rolle der Port-`3000`-Konsole als gemeinsame Test- und Integrationsoberflaeche fuer Hook, Preview und Modellvergleiche klarer beschrieben
+- dokumentiert, dass die produktive Default-Architektur dieses Projekts bewusst OCR- und textzentriert bleibt, waehrend Vision-/OCR-Modelle eher als spaetere GPU- oder Cloud-Erweiterung betrachtet werden
+
 ## 2026-03-28
 
 ### OCR Pipeline Hardening

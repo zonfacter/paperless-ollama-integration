@@ -144,6 +144,8 @@ Wichtig:
 - lokaler API-Server auf `127.0.0.1:11434`
 - Modell z. B. `qwen3.5:9b`, `qwen3.5:4b` oder `qwen2.5:7b-instruct`
 - keine direkte Internetnutzung durch das Modell selbst
+- kann technisch auch zusaetzliche OCR-/Vision-Modelle fuer die Review-Stufe anbinden
+- eignet sich in einer CPU-VM praktisch vor allem fuer Textmodelle und bewusst begrenzte Vorschaupfade
 
 ### Browser-Zugriff
 
@@ -190,6 +192,25 @@ Browser -> :3000
        -> optional API PATCH nach Bestaetigung
 ```
 
+## Datenfluss fuer experimentelle OCR-/Vision-Modelle
+
+```text
+Browser -> :3000
+       -> web/server.py
+       -> PDF-Seite rendern + OCR-Kontext laden
+       -> minimierten Vision-/OCR-Prompt bauen
+       -> lokales Ollama-Modell anfragen
+       -> Ergebnis fuer Vergleich / Review anzeigen
+```
+
+Wichtig:
+
+- dieser Integrationspfad funktioniert technisch mit mehreren Modellen
+- auf einer CPU-VM ist nicht die Anbindung der Engpass, sondern die Laufzeit des multimodalen Prompts
+- deshalb trennt das Projekt bewusst zwischen:
+  - produktivem textbasiertem Hook
+  - optionalem experimentellem Vision-Review
+
 ## Datenfluss fuer Backfill
 
 ```text
@@ -225,3 +246,4 @@ Browser -> :3000 -> Backfill starten
 - kurze bis mittlere Prompts sind gut nutzbar, lange Laeufe sind spuerbar langsamer
 - Prompt-Qualitaet bestimmt stark die Qualitaet der Tags und Titel
 - paralleler Chat auf demselben `Ollama`-Dienst kann Paperless-Laeufe bremsen
+- multimodale OCR-/Vision-Modelle koennen technisch korrekt eingebunden sein und dennoch fuer interaktive CPU-VM-Laeufe zu langsam bleiben
