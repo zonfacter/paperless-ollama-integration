@@ -9,6 +9,7 @@
 - festgehalten, dass lokal erfolgreich angebundene Modelle je nach Host trotzdem fuer multimodale Dokumentprompts in Timeouts laufen koennen
 - die Rolle der Port-`3000`-Konsole als gemeinsame Test- und Integrationsoberflaeche fuer Hook, Preview und Modellvergleiche klarer beschrieben
 - dokumentiert, dass die produktive Default-Architektur dieses Projekts bewusst OCR- und textzentriert bleibt, waehrend Vision-/OCR-Modelle eher als spaetere GPU- oder Cloud-Erweiterung betrachtet werden
+- optionalen `PaddleOCR`-API-Container als reproduzierbare Docker-Basis fuer spaetere OCR-Integration und Vergleichstests hinzugefuegt
 
 ## 2026-03-28
 

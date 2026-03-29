@@ -78,6 +78,8 @@ The current state of this project reflects a working setup with the following bu
   - configuration helper for `paperless.conf`
 - `docs/`
   - installation, operations, architecture, security, and UI documentation
+- `docker/paddleocr-api/`
+  - optional `PaddleOCR` API container for OCR experiments and later integration
 
 ## Architecture
 
@@ -245,6 +247,7 @@ In short:
 - [WEB_UI](docs/WEB_UI.md)
 - [UI_NOTES](docs/UI_NOTES.md)
 - [TROUBLESHOOTING](docs/TROUBLESHOOTING.md)
+- [PADDLEOCR_API](docs/PADDLEOCR_API.md)
 
 ## Notes
 

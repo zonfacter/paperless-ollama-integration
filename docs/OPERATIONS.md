@@ -8,6 +8,7 @@
 - `paperless-scheduler.service`
 - `ollama.service`
 - `ollama-web.service`
+- optional: `paddleocr-api` as Docker container
 
 ## Pruefen
 
@@ -61,6 +62,15 @@ Nach Aenderungen ist normalerweise kein Dienstneustart noetig. Neue Hook-Laeufe 
 
 ```bash
 curl -sS http://127.0.0.1:11434/api/generate -d '{"model":"qwen3.5:4b","prompt":"Antworte nur mit OK.","stream":false}'
+```
+
+## Optionalen PaddleOCR-Dienst testen
+
+Wenn der optionale Docker-Dienst laeuft:
+
+```bash
+curl -sS http://127.0.0.1:8091/healthz
+curl -sS -F "file=@/path/to/page.jpg" http://127.0.0.1:8091/ocr
 ```
 
 ## Wichtige Konfiguration in `paperless.conf`

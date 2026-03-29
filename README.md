@@ -78,6 +78,8 @@ Der aktuelle Stand dieses Projekts bildet eine funktionierende Installation mit 
   - Konfigurationshilfe fuer `paperless.conf`
 - `docs/`
   - Installations-, Betriebs- und Sicherheitsdokumentation
+- `docker/paddleocr-api/`
+  - optionaler `PaddleOCR`-API-Container fuer OCR-Experimente und spaetere Integration
 
 ## Architektur
 
@@ -244,6 +246,7 @@ Kurz gesagt:
 - [WEB_UI](docs/WEB_UI.md)
 - [UI_NOTES](docs/UI_NOTES.md)
 - [TROUBLESHOOTING](docs/TROUBLESHOOTING.md)
+- [PADDLEOCR_API](docs/PADDLEOCR_API.md)
 
 ## Hinweise
 

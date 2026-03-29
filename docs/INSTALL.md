@@ -54,6 +54,20 @@ For Docker installs you will usually also need:
 - the Paperless webserver service name, usually `webserver`
 - a host path where hook, prompt, and backfill files should be mounted
 
+## Optional: PaddleOCR API Container
+
+If you want to test or expose `PaddleOCR` as a separate HTTP service, this repository also includes an optional API container:
+
+```text
+docker/paddleocr-api/
+```
+
+Typical use case:
+
+- keep `paperless-ngx` OCR unchanged
+- run `PaddleOCR` beside it as a comparison or future enhancement service
+- call it from scripts or a later review step
+
 ## Environment Types
 
 ### Native VM / Dedicated Server

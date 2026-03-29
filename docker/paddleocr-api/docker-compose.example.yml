@@ -1,0 +1,15 @@
+services:
+  paddleocr-api:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: paddleocr-api
+    ports:
+      - "8091:8091"
+    environment:
+      PADDLEOCR_LANG: german
+      PADDLEOCR_DEVICE: cpu
+      PADDLEOCR_CPU_THREADS: "4"
+      PADDLEOCR_ENABLE_MKLDNN: "true"
+      PADDLE_PDX_DISABLE_MODEL_SOURCE_CHECK: "true"
+    restart: unless-stopped
