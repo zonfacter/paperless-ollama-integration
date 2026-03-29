@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+import base64
 import json
 import os
 import re
@@ -203,11 +204,52 @@ def prompt_for_document(document: dict, existing_person_tags: list[str]) -> str:
     )
 
 
-def call_openai(prompt: str) -> dict:
+def prompt_for_tags(document: dict, result: dict) -> str:
+    content_chars = int(env("PAPERLESS_AI_TAG_CONTENT_CHARS", env("PAPERLESS_AI_CONTENT_CHARS", "5000")))
+    content = truncate_text(document.get("content") or "", content_chars)
+    title = clean_name(str(result.get("title", "")))
+    correspondent = clean_name(str(result.get("correspondent", "")))
+    document_type = clean_name(str(result.get("document_type", "")))
+    reason = truncate_text(str(result.get("reason", "")), 200)
+    family = detect_document_family(document, result) or "-"
+    return f"""Du waehlst nur wenige, gute Archiv-Tags fuer paperless-ngx.
+Antworte nur als JSON.
+
+Ziel:
+- Liefere 1 bis 3 Haupttags.
+- Nur der Hauptkontext des Dokuments.
+- Keine Nebenbegriffe und keine Randthemen.
+
+Leitplanken:
+- Korrespondenz: {correspondent or "-"}
+- Dokumenttyp: {document_type or "-"}
+- Dokumentfamilie: {family}
+- Titel: {title or "-"}
+- Einordnung: {reason or "-"}
+
+Regeln:
+- Keine Personen, keine Orte, keine Institutionen als Tags.
+- Keine Kanzleinamen, Gerichte, Aemter, Schulen, Praxen, Krankenhaeuser als Tags.
+- Keine Jahre, Aktenzeichen, IDs, Formularnummern oder Adressen.
+- Bei anwaltlichen, behoerdlichen oder gerichtlichen Schreiben muessen Tags den Vorgang beschreiben, nicht den Absender.
+- Bei medizinischen Dokumenten nur Diagnose, Befund, Behandlung, Attest, Labor, Medikation o. ae., wenn das Hauptthema es traegt.
+- Bei schulischen Schreiben nur den Vorgang oder die Massnahme taggen, nicht die Schule oder beteiligte Personen.
+- Nutze nur Tags, die als Archivkategorie wiederverwendbar sind.
+- Wenn unklar, lieber weniger Tags.
+
+Rueckgabeformat:
+{{"tags":["string"],"reason":"kurz","confidence":0.0}}
+
+OCR-Inhalt:
+{content}
+"""
+
+
+def call_openai(prompt: str, model: str | None = None) -> dict:
     api_key = env("OPENAI_API_KEY")
     if not api_key:
         raise RuntimeError("OPENAI_API_KEY is not set")
-    model = env("PAPERLESS_AI_OPENAI_MODEL", "gpt-5.4-mini")
+    model = model or env("PAPERLESS_AI_OPENAI_MODEL", "gpt-5.4-mini")
     payload = {
         "model": model,
         "input": [
@@ -287,20 +329,27 @@ def is_timeout_error(exc: Exception) -> bool:
     return isinstance(exc, TimeoutError) or "timed out" in message or "timeout" in message
 
 
-def get_provider_response_details(prompt: str) -> tuple[dict, dict]:
+def get_provider_response_details(
+    prompt: str,
+    model_override: str | None = None,
+    timeout_override: float | None = None,
+    fallback_model_override: str | None = None,
+    fallback_timeout_override: float | None = None,
+    fallback_enabled_override: bool | None = None,
+) -> tuple[dict, dict]:
     provider = env("PAPERLESS_AI_PROVIDER", "ollama").lower()
     if provider == "openai":
-        return call_openai(prompt), {
+        return call_openai(prompt, model=model_override or env("PAPERLESS_AI_OPENAI_MODEL", "gpt-5.4-mini")), {
             "provider": "openai",
-            "model": env("PAPERLESS_AI_OPENAI_MODEL", "gpt-5.4-mini"),
+            "model": model_override or env("PAPERLESS_AI_OPENAI_MODEL", "gpt-5.4-mini"),
             "fallback_used": False,
         }
     if provider == "ollama":
-        primary_model = env("PAPERLESS_AI_OLLAMA_MODEL", "qwen2.5:7b-instruct")
-        primary_timeout = float(env("PAPERLESS_AI_HTTP_TIMEOUT_SECONDS", "300"))
-        fallback_enabled = env("PAPERLESS_AI_FALLBACK_ENABLED", "false").lower() in ("1", "true", "yes", "on")
-        fallback_model = env("PAPERLESS_AI_FALLBACK_MODEL", "qwen2.5:3b-instruct")
-        fallback_timeout = float(env("PAPERLESS_AI_FALLBACK_HTTP_TIMEOUT_SECONDS", str(primary_timeout)))
+        primary_model = model_override or env("PAPERLESS_AI_OLLAMA_MODEL", "qwen2.5:7b-instruct")
+        primary_timeout = timeout_override if timeout_override is not None else float(env("PAPERLESS_AI_HTTP_TIMEOUT_SECONDS", "300"))
+        fallback_enabled = fallback_enabled_override if fallback_enabled_override is not None else env("PAPERLESS_AI_FALLBACK_ENABLED", "false").lower() in ("1", "true", "yes", "on")
+        fallback_model = fallback_model_override or env("PAPERLESS_AI_FALLBACK_MODEL", "qwen2.5:3b-instruct")
+        fallback_timeout = fallback_timeout_override if fallback_timeout_override is not None else float(env("PAPERLESS_AI_FALLBACK_HTTP_TIMEOUT_SECONDS", str(primary_timeout)))
         fallback_timeout_only = env("PAPERLESS_AI_FALLBACK_ON_TIMEOUT_ONLY", "true").lower() in ("1", "true", "yes", "on")
         try:
             return call_ollama(prompt, model=primary_model, timeout=primary_timeout), {
@@ -453,6 +502,8 @@ def detect_document_family(document: dict, result: dict) -> str:
     ).casefold()
     if any(token in haystack for token in ("amtsgericht", "landgericht", "oberlandesgericht", "familiengericht", "beschluss", "pflegschaft", "sofortige beschwerde")):
         return "court"
+    if any(token in haystack for token in ("kanzlei", "rechtsanwalt", "rechtsanwält", "rechtsanwaelt", "schriftsatz", "stellungnahme", "gegnerbevollmächtig", "gegnerbevollmaechtig", "strafprozeßvollmacht", "strafprozessvollmacht")):
+        return "lawyer"
     if any(token in haystack for token in ("schule", "realschule", "gymnasium", "schulleiter", "fehltag", "schulpflicht", "attest")):
         return "school"
     if any(token in haystack for token in ("arzt", "ärzt", "praxis", "klinik", "krankenhaus", "diagnose", "befund", "attest")):
@@ -463,8 +514,37 @@ def detect_document_family(document: dict, result: dict) -> str:
 
 
 def canonicalize_tag(tag: str) -> str:
-    value = clean_name(tag)
+    value = clean_name(tag).replace("/", " ").replace("_", " ")
+    value = normalize_whitespace(value)
     mapping = {
+        "schulpflicht": "Schulpflicht",
+        "fehlzeiten": "Fehlzeiten",
+        "familienrecht": "Familienrecht",
+        "ermittlungsverfahren": "Ermittlungsverfahren",
+        "strafverfahren": "Strafverfahren",
+        "unterhalt": "Unterhalt",
+        "behandlung": "Behandlung",
+        "labor": "Labor",
+        "medikation": "Medikation",
+        "diagnose": "Diagnose",
+        "befund": "Befund",
+        "kinderarzt": "Kinderarzt",
+        "psychotherapie": "Psychotherapie",
+        "kieferorthopädie": "Kieferorthopädie",
+        "kieferorthopaedie": "Kieferorthopädie",
+        "zahnmedizin": "Zahnmedizin",
+        "einkommensteuer": "Einkommensteuer",
+        "steuererklärung": "Steuererklärung",
+        "steuererklaerung": "Steuererklärung",
+        "formular": "Formular",
+        "elster": "ELSTER",
+        "school fehlzeiten": "Fehlzeiten",
+        "court pflegschaft": "Pflegschaft",
+        "aufhebung pflegschaft": "Pflegschaft",
+        "aufhebung der pflegschaft": "Pflegschaft",
+        "aufhebung pflegschaft der kinder": "Pflegschaft",
+        "ärztliches attest": "Attest",
+        "aerztliches attest": "Attest",
         "ärztliche atteste": "Attest",
         "aerztliche atteste": "Attest",
         "ärztliche bescheinigung": "Attest",
@@ -483,6 +563,60 @@ def looks_like_institution_tag(tag: str) -> bool:
         "realschule", "gymnasium", "familiengericht", "landgericht", "amtsgericht",
         "praxis", "klinik", "krankenhaus",
     ))
+
+
+DEFAULT_ALLOWED_TAGS_BY_FAMILY = {
+    "lawyer": {
+        "Familienrecht", "Unterhalt", "Umgangsrecht", "Sorgerecht",
+        "Strafverfahren", "Ermittlungsverfahren", "Schriftsatz",
+        "Stellungnahme", "Vollmacht", "Gewaltschutz",
+    },
+    "school": {
+        "Fehlzeiten", "Schulpflicht", "Attest", "Bußgeld", "Versetzung",
+        "Zeugnis", "Förderung", "Unterrichtsausfall", "Schulpsychologie",
+    },
+    "court": {
+        "Familienrecht", "Pflegschaft", "Unterhalt", "Umgangsrecht",
+        "Ermittlungsverfahren", "Strafverfahren", "Beschwerde",
+        "Beschluss", "Sorgerecht", "Gewaltschutz",
+    },
+    "medical": {
+        "Diagnose", "Befund", "Attest", "Labor", "Medikation",
+        "Psychotherapie", "Kieferorthopädie", "Kinderarzt",
+        "Behandlung", "Krankschreibung", "Allergologie",
+        "Zahnmedizin", "Intelligenztest",
+    },
+    "tax": {
+        "Einkommensteuer", "Steuererklärung", "ELSTER", "Formular",
+        "Sonderausgaben", "Renteneinkünfte", "Kirchensteuer",
+        "Außergewöhnliche Belastungen", "Kapitaleinkünfte",
+    },
+}
+
+
+def load_allowed_tags_by_family() -> dict[str, set[str]]:
+    raw_b64 = env("PAPERLESS_AI_TAG_ALLOWLISTS_B64", "")
+    source = DEFAULT_ALLOWED_TAGS_BY_FAMILY
+    if raw_b64:
+        try:
+            decoded = base64.b64decode(raw_b64).decode("utf-8")
+            parsed = json.loads(decoded)
+            if isinstance(parsed, dict):
+                normalized: dict[str, set[str]] = {}
+                for family, tags in parsed.items():
+                    if not isinstance(tags, list):
+                        continue
+                    normalized[str(family)] = {clean_name(str(tag)) for tag in tags if clean_name(str(tag))}
+                if normalized:
+                    source = normalized
+        except Exception as exc:
+            warn(f"Could not parse PAPERLESS_AI_TAG_ALLOWLISTS_B64, using defaults: {exc}")
+    return {family: set(tags) for family, tags in source.items()}
+
+
+def default_allowed_tags_by_family_json() -> str:
+    serializable = {family: sorted(tags, key=str.casefold) for family, tags in DEFAULT_ALLOWED_TAGS_BY_FAMILY.items()}
+    return json.dumps(serializable, indent=2, ensure_ascii=False)
 
 
 def refine_tags(result: dict, document: dict) -> list[str]:
@@ -515,8 +649,15 @@ def refine_tags(result: dict, document: dict) -> list[str]:
         if family == "court":
             if looks_like_institution_tag(tag):
                 continue
+        if family == "lawyer":
+            if looks_like_institution_tag(tag):
+                continue
         if family == "tax":
             if looks_like_institution_tag(tag):
+                continue
+        if family:
+            allowed = load_allowed_tags_by_family().get(family, set())
+            if allowed and tag not in allowed:
                 continue
         seen.add(key)
         refined.append(tag[:50])
@@ -527,6 +668,54 @@ def refine_result(result: dict, document: dict) -> dict:
     refined = dict(result)
     refined["tags"] = refine_tags(refined, document)
     return refined
+
+
+def sanitize_tag_result(result: dict | list | None) -> list[str]:
+    if isinstance(result, dict):
+        tags = result.get("tags", [])
+    elif isinstance(result, list):
+        tags = result
+    else:
+        tags = []
+    if not isinstance(tags, list):
+        return []
+    clean_tags: list[str] = []
+    seen: set[str] = set()
+    for item in tags:
+        tag = clean_name(str(item))
+        if not tag:
+            continue
+        key = tag.casefold()
+        if key in seen:
+            continue
+        seen.add(key)
+        clean_tags.append(tag[:50])
+    return clean_tags[:3]
+
+
+def apply_tag_review(document: dict, result: dict) -> tuple[dict, dict]:
+    review_enabled = env("PAPERLESS_AI_TAG_REVIEW_ENABLED", "true").lower() in ("1", "true", "yes", "on")
+    if not review_enabled:
+        return refine_result(result, document), {"enabled": False, "model": ""}
+    prompt = prompt_for_tags(document, result)
+    tag_model = env("PAPERLESS_AI_TAG_OLLAMA_MODEL", env("PAPERLESS_AI_OLLAMA_MODEL", "qwen3.5:9b"))
+    tag_timeout = float(env("PAPERLESS_AI_TAG_HTTP_TIMEOUT_SECONDS", env("PAPERLESS_AI_HTTP_TIMEOUT_SECONDS", "600")))
+    fallback_model = env("PAPERLESS_AI_TAG_FALLBACK_MODEL", env("PAPERLESS_AI_FALLBACK_MODEL", "qwen3.5:0.8b"))
+    fallback_timeout = float(env("PAPERLESS_AI_TAG_FALLBACK_HTTP_TIMEOUT_SECONDS", env("PAPERLESS_AI_FALLBACK_HTTP_TIMEOUT_SECONDS", str(tag_timeout))))
+    fallback_enabled = env("PAPERLESS_AI_TAG_FALLBACK_ENABLED", env("PAPERLESS_AI_FALLBACK_ENABLED", "true")).lower() in ("1", "true", "yes", "on")
+    raw_tags, meta = get_provider_response_details(
+        prompt,
+        model_override=tag_model,
+        timeout_override=tag_timeout,
+        fallback_model_override=fallback_model,
+        fallback_timeout_override=fallback_timeout,
+        fallback_enabled_override=fallback_enabled,
+    )
+    reviewed = dict(result)
+    reviewed["tags"] = sanitize_tag_result(raw_tags)
+    reviewed = refine_result(reviewed, document)
+    meta["enabled"] = True
+    return reviewed, meta
 
 
 def should_apply(result: dict) -> bool:
@@ -567,11 +756,17 @@ def main() -> int:
     started = time.time()
     raw_result, response_meta = get_provider_response_details(prompt)
     result = refine_result(sanitize_result(raw_result), document)
+    tag_meta = {"enabled": False, "model": ""}
+    try:
+        result, tag_meta = apply_tag_review(document, result)
+    except Exception as exc:
+        warn(f"Tag review failed for document {document_id}: {exc}")
     duration = round(time.time() - started, 2)
     model_info = response_meta.get("model", "-")
     if response_meta.get("fallback_used"):
         model_info = f"{model_info} (fallback from {response_meta.get('fallback_from', '-')})"
-    log(f"LLM analyzed document {document_id} in {duration}s using {model_info}")
+    tag_model_info = tag_meta.get("model", "-") if tag_meta.get("enabled") else "-"
+    log(f"LLM analyzed document {document_id} in {duration}s using {model_info}; tag_review={tag_model_info}")
 
     if not should_apply(result):
         log(f"Skipped document {document_id}: confidence below threshold")
