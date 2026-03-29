@@ -97,8 +97,12 @@ HTML = """<!doctype html>
       gap: 14px;
       justify-self: start;
       transform: translateX(-200px);
+      z-index: 20;
+      pointer-events: auto;
     }
     .nav-card {
+      position: relative;
+      z-index: 21;
       background: var(--panel);
       backdrop-filter: blur(16px);
       border: 1px solid var(--line);
@@ -166,6 +170,8 @@ HTML = """<!doctype html>
       display: grid;
       gap: 18px;
       min-width: 0;
+      position: relative;
+      z-index: 1;
     }
     .view {
       display: none;
@@ -708,15 +714,15 @@ HTML = """<!doctype html>
       <aside class="sidebar">
         <div class="nav-card">
           <div class="nav-list">
-            <button class="nav-btn active" data-view-target="review-view">
+            <button class="nav-btn active" data-view-target="review-view" type="button">
               Review Workspace
               <small>Dokumente suchen, Vorschau erzeugen, KI-Vorschlag uebernehmen.</small>
             </button>
-            <button class="nav-btn" data-view-target="control-view">
+            <button class="nav-btn" data-view-target="control-view" type="button">
               Steuerung
               <small>Modelle, Prompt, OCR-Kontext, Timeout und Fallback verwalten.</small>
             </button>
-            <button class="nav-btn" data-view-target="chat-view">
+            <button class="nav-btn" data-view-target="chat-view" type="button">
               Chat
               <small>Direkte Modelltests im Browser ohne Paperless-Lauf.</small>
             </button>
@@ -1872,7 +1878,7 @@ HTML = """<!doctype html>
           lines.push('');
           lines.push(...data.commands);
         }
-        paddleOcrInstallPlanEl.textContent = lines.join('\n') || 'Keine Installationshilfe vorhanden.';
+        paddleOcrInstallPlanEl.textContent = lines.join('\\n') || 'Keine Installationshilfe vorhanden.';
       } catch (err) {
         paddleOcrInstallPlanEl.textContent = `Fehler: ${err.message}`;
       }
