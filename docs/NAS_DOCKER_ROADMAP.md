@@ -20,6 +20,7 @@ Die Datei ist bewusst so geschrieben, dass sie auf das NAS kopiert werden kann u
 - Lokale Modelle bleiben lokal.
 - Keine persoenlichen Tags, Namen, Orte oder API-Tokens in Git.
 - Konfiguration ueber `.env`, JSON-Config, Volumes und Weboberflaeche.
+- Secrets getrennt von Beispielkonfiguration halten.
 - Dienste klar trennen:
   - Dokumentenverwaltung
   - OCR
@@ -31,6 +32,9 @@ Die Datei ist bewusst so geschrieben, dass sie auf das NAS kopiert werden kann u
 - Keine Annahme, dass Host-Pfade aus der VM 1:1 auf dem NAS existieren.
 - Modellverwaltung muss fuer Nicht-Programmierer ueber die Weboberflaeche erreichbar sein.
 - Lokale und externe KI-Dienste muessen als gleichwertige Quellen gedacht werden.
+- Kein Docker-Socket in der Weboberflaeche als stillschweigende Abkuerzung.
+- Restore-Faehigkeit ist genauso wichtig wie Backup.
+- Containerrechte, UID/GID und Dateibesitzer werden als eigenes Thema behandelt, nicht als spaeterer Nachtrag.
 
 ## Zielarchitektur
 
@@ -176,6 +180,20 @@ Dort muss spaeter moeglich sein:
 - Healthcheck / Verbindungstest ausfuehren
 - zwischen Providern umschalten
 
+### Bereich `System / Updates`
+
+Dort muss spaeter moeglich sein:
+
+- aktuelle lokale Version anzeigen
+- verfuegbare neue Version erkennen
+- Changelog/Release-Hinweis anzeigen
+- kontrolliertes Update ueber den Docker-Compose-Dienst anstossen
+- vor dem Update auf Backup/Restore-Hinweis aufmerksam machen
+- nach dem Update klar zeigen, ob:
+  - Container neu gestartet wurden
+  - Konfiguration erhalten blieb
+  - Migrationen erfolgreich liefen
+
 ### Installationsmoeglichkeiten fuer Modelle
 
 Das System soll spaeter mehrere Wege unterstuetzen:
@@ -241,6 +259,85 @@ Stattdessen braucht es:
 - Healthchecks
 - Zuweisung von Rolle -> Provider -> Modell
 
+## Update- und Versionskonzept
+
+Das NAS-Zielbild braucht einen sauberen Update-Pfad.
+
+### Ziel
+
+Ein Nutzer soll spaeter in der Weboberflaeche sehen koennen:
+
+- welche Version lokal laeuft
+- ob es eine neuere Version gibt
+- ob ein Update nur das Web-UI betrifft oder den gesamten Stack
+
+### Image-Distribution
+
+Fuer den NAS-Betrieb soll von Anfang an mitgedacht werden, woher Container-Images kommen.
+
+Moegliche Wege:
+
+- Build lokal auf dem NAS
+- Build ueber GitHub Actions
+- Push nach Docker Hub
+- spaeter optional GHCR
+
+Pragmatische Empfehlung:
+
+- reproduzierbare Builds ueber GitHub
+- veroeffentlichte Images in Docker Hub oder GHCR
+- lokaler NAS-Build nur als Ausnahme oder Testpfad
+
+So kann die Weboberflaeche spaeter auch klar unterscheiden:
+
+- welche Version lokal deployed ist
+- aus welcher Registry das Image stammt
+- ob ein Update aus GitHub Release, Docker Hub Tag oder lokalem Build kommt
+
+### Mindestanforderungen
+
+- lokale Versionsinfo aus einem klaren Build-/Release-Merkmal
+- Remote-Versionscheck gegen GitHub Releases oder ein spaeteres Release-Manifest
+- Update nicht blind im Hintergrund, sondern bewusst bestaetigt
+- Hinweis, welche Container betroffen sind
+- Hinweis, ob ein DB-/Media-/Config-Backup empfohlen oder Pflicht ist
+
+### Wichtige Designregel
+
+Ein Update darf nie davon abhaengen, dass Konfiguration im Container selbst liegt.
+
+Deshalb muessen erhalten bleiben:
+
+- Dokumente und Archivdaten auf Host-Volumes
+- Prompt-Dateien auf Host-Volumes
+- JSON-Konfiguration fuer:
+  - Preview
+  - Tag-Regeln
+  - Provider
+  - Modelle
+- Jobstatus-/Task-Manager-Daten
+- optionale OCR-/PaddleOCR-Caches nur, wenn gewuenscht
+
+### Update-Zielbild
+
+Die Weboberflaeche darf spaeter ein Compose-Update anstossen, aber nur unter klaren Bedingungen:
+
+- nur fuer den definierten NAS-Stack
+- kein generischer Docker-Socket-Vollzugriff
+- bevorzugt ueber einen schmalen, klar begrenzten Update-Worker oder NAS-spezifischen Update-Helfer
+- mit Rueckmeldung zu:
+  - Pull erfolgreich
+  - Container neu erstellt
+  - Healthchecks wieder gruen
+
+### Nicht verwechseln
+
+- Container-Image aktualisieren
+- Konfiguration aktualisieren
+- Daten migrieren
+
+sind drei getrennte Dinge und muessen in UI und Doku auch getrennt kommuniziert werden.
+
 ## Persistente Volumes
 
 Mindestens:
@@ -260,6 +357,10 @@ Zusatz fuer die Webkonsole:
 - Preview-/Job-Status-Dateien
 - lokale UI-Config
 - Tag-Allowlist-/Regel-JSON
+- Provider-/Modell-JSON
+- Prompt-Dateien
+- OCR-Zwischencache nur, wenn bewusst begrenzt und aufraeumbar
+- Versions-/Update-State
 
 Wichtig:
 
@@ -284,9 +385,101 @@ Auf dem NAS sollte es einen klaren Konfigurationsbereich geben, z. B.:
   prompts/
     ai_enrich_prompt.txt
   logs/
+  data/
+    consume/
+    media/
+    export/
+  secrets/
+    paperless_api_token
+    postgres_password
+    optional_remote_provider_token
 ```
 
 Wenn das NAS andere Standards hat, ist die Struktur sinngemaess gleich zu halten.
+
+Wichtig:
+
+- Beispielwerte gehoeren in `.env.example` und `config/*.example.json`.
+- echte Tokens und Passwoerter gehoeren in `secrets/` oder NAS-Secrets, nicht in normale Beispiel-Dateien.
+- die Weboberflaeche darf produktive Secrets nicht im Klartext aus Git-Beispielen ableiten.
+
+## Pflichtthemen, die in Docker-Projekten oft zu spaet bedacht werden
+
+Diese Punkte muessen vor dem eigentlichen NAS-Start bewusst eingeplant werden.
+
+### 1. Backup **und** Restore
+
+Nicht nur sichern, sondern rueckspielen koennen.
+
+Pflicht:
+
+- `postgres`-Backup
+- `paperless_media`
+- `paperless_export`
+- Prompt-/Config-Dateien
+- Jobstatus-/Review-Konfiguration
+
+Pflicht-Nachweis:
+
+- ein Test-Restore in ein zweites Zielverzeichnis oder eine Test-Compose
+- danach pruefen:
+  - Dokumente sichtbar
+  - OCR/Textindex plausibel
+  - Review-/Task-Manager-Konfiguration noch vorhanden
+
+### 2. Rechte- und Besitzmodell
+
+Vor dem NAS-Start klar festlegen:
+
+- welcher User/Gruppenkontext in den Containern laeuft
+- welche UID/GID auf NAS-Freigaben und NFS-Freigaben gelten
+- wer Schreibrechte auf:
+  - `consume`
+  - `media`
+  - `export`
+  - `config`
+  - `logs`
+  hat
+
+Ohne diese Klarheit werden spaeter halbfertige Imports und nicht beschreibbare Config-Dateien die Regel.
+
+### 3. Netzfreigabe und Reverse Proxy
+
+Vorab entscheiden:
+
+- laeuft `paperless-ai-web` direkt auf `:3000`
+- oder hinter einem Reverse Proxy des NAS
+- oder hinter `https`/LAN-Proxy
+
+Pflicht:
+
+- nur die noetigen Ports nach aussen oeffnen
+- interne Container-Kommunikation ueber Docker-Netz
+- `ollama` und optionale OCR-APIs nicht unnoetig direkt ins LAN exponieren
+
+### 4. Upgrade-Strategie
+
+Nicht nur den ersten Start planen.
+
+Pflicht:
+
+- feste Image-Tags statt blind `latest`
+- definierter Update-Ablauf
+- kurze Checkliste fuer Rollback
+- Datenbank-Backup vor Image-Upgrades
+- sichtbare Versionen in der Weboberflaeche
+- kein Updatepfad, der Containerdaten statt Host-Daten vertraut
+
+### 5. Schreibpfade der Weboberflaeche
+
+Die `:3000`-Oberflaeche darf spaeter nicht wieder auf Host-Helfer oder willkuerliche Shell-Skripte angewiesen sein.
+
+Stattdessen:
+
+- Web-UI schreibt nur in klar gemountete Config-/State-Verzeichnisse
+- Hintergrundjobs werden ueber definierte Prozesse gestartet
+- keine implizite Abhaengigkeit auf `systemd`
+- kein stiller Bedarf an Root auf dem Host
 
 ## Scanner- und NFS-Konzept
 
@@ -314,6 +507,10 @@ Bevorzugt:
 
 - Scanner schreibt auf einen NAS-Ordner
 - Docker bind-mountet genau diesen Ordner in den `consume`-Pfad
+- optionaler Vorstufen-Ordner:
+  - `incoming/`
+  - `consume/`
+  - erst nach Dateivollstaendigkeit verschieben/umbenennen
 
 Weniger gut:
 
@@ -329,6 +526,10 @@ Dann muss beachtet werden:
   - zuerst temporaer schreiben
   - danach rename auf finalen Dateinamen
 - keine halbfertigen PDFs im Consume-Ordner liegen lassen
+- wenn noetig, kleinen Staging-/Promote-Mechanismus vorsehen
+  - Beispiel:
+    - Scanner schreibt nach `incoming/`
+    - ein leichter Watcher verschiebt nur abgeschlossene Dateien nach `consume/`
 
 ### Wichtig fuer Paperless
 
@@ -338,6 +539,8 @@ Vor dem NAS-Betrieb pruefen:
 - welche UID/GID genutzt wird
 - ob der Scanner-/NFS-Pfad fuer diesen User lesbar ist
 - ob der Ingest auf dem NAS mit grossen PDFs stabil bleibt
+- ob das gewaehlte NAS-Dateisystem/Share-Verhalten Polling statt Events erfordert
+- ob der Scanner denselben Dateinamen mehrfach wiederverwendet
 
 ## Lessons Learned aus der VM
 
@@ -368,6 +571,13 @@ Konsequenz fuer NAS:
 
 muessen in der Weboberflaeche bleiben.
 
+Zusaetzlich:
+
+- Fortschritt `x / n`
+- Start-/Endzeit
+- sichtbarer Returncode oder Fehlerklasse
+- Jobhistorie mit manueller Bereinigung
+
 ### 3. OCR ist kein Einzelschalter
 
 Wir hatten reale Unterschiede zwischen:
@@ -383,6 +593,8 @@ Konsequenz fuer NAS:
 - OCR-Einstellungen muessen bewusst dokumentiert werden
 - fuer problematische PDFs darf OCR konfigurierbar bleiben
 - `PaddleOCR` bleibt Zusatzpfad, nicht unbedacht globaler Ersatz
+- OCR-Quelle fuer Review und fuer produktiven Import bewusst trennen
+- nicht jede OCR-Experimentierquelle direkt in den Auto-Import haengen
 
 ### 4. Logs muessen menschenlesbar sein
 
@@ -410,6 +622,9 @@ Konsequenz fuer NAS:
 
 - `compose.yml`
   - komplette Zielarchitektur
+  - feste Service-Namen
+  - feste Volumes
+  - Healthchecks, wo sinnvoll
 
 ### Lokal/Host-spezifisch
 
@@ -418,6 +633,8 @@ Konsequenz fuer NAS:
   - Pfade
   - CPU-/RAM-Limits
   - GPU-/iGPU-Mapping spaeter
+  - Reverse-Proxy-spezifische Anpassungen
+  - NAS-spezifische UID/GID oder Device-Mappings
 
 ### Beispielwerte
 
@@ -445,6 +662,9 @@ Aufgaben:
 5. Consume-/Media-/Export-/Backup-Pfade festlegen.
 6. Scanner-/NFS-Pfad und Rechte pruefen.
 7. `paperless` ohne KI zuerst stabil starten.
+8. Zeitzone/Locale bewusst setzen.
+9. Restore-Test fuer Basisdaten vor KI-Aufbau vorbereiten.
+10. Host-Datenpfade so anlegen, dass Updates Container gefahrlos ersetzen duerfen.
 
 Abnahmekriterium:
 
@@ -467,6 +687,7 @@ Aufgaben:
 4. CPU-Thread-Default fuer das NAS setzen.
 5. bewusst pruefen, ob nutzbare GPU-/Render-Devices im Container sichtbar sind.
 6. Provider-Struktur so anlegen, dass spaeter auch `ollama_remote` moeglich bleibt.
+7. Healthcheck fuer `ollama` im Docker-Netz setzen.
 
 Abnahmekriterium:
 
@@ -492,6 +713,8 @@ Aufgaben:
    testen.
 4. Task Manager mit persistentem Jobstatus zuerst absichern.
 5. neue Modell-/Provider-Menuepunkte vorbereiten.
+6. keine Docker-Socket-Abhaengigkeit im Webcontainer einbauen.
+7. alle Web-Schreibpfade auf Volume-Dateien begrenzen.
 
 Abnahmekriterium:
 
@@ -516,6 +739,10 @@ Aufgaben:
    - Preview
    - Tag-Review
    - OCR-Zusatz
+7. Abbruch, Neustart und Job-Leichen explizit behandeln.
+8. Concurrency festlegen:
+   - wie viele Backfills gleichzeitig erlaubt sind
+   - ob Preview/Chat waehrend Backfill gedrosselt werden
 
 Abnahmekriterium:
 
@@ -562,6 +789,9 @@ Aufgaben:
    - Jobstatus
 6. Scanner-Ingest inkl. NFS-/Rechte-Test im Realbetrieb pruefen.
 7. Provider-Wechsel und Modell-Neuinstallation ohne Shell pruefen.
+8. Upgrade-/Rollback-Playbook festhalten.
+9. Restore-Test einmal real durchspielen.
+10. Versionscheck und Update-Hinweis in der Weboberflaeche finalisieren.
 
 Abnahmekriterium:
 
@@ -593,6 +823,8 @@ Nicht Teil des ersten MVP:
 - GPU-Tuning
 - aufwendige OCR-Fallback-Matrix
 - vollautomatische Installation beliebiger Fremdmodelle aus jeder Quelle
+- direkter Schreibzugriff der Weboberflaeche auf den Docker-Socket
+- vollautomatische unbestaetigte Self-Updates
 
 ## Empfohlene Arbeitsreihenfolge auf dem NAS
 
@@ -621,6 +853,8 @@ Deshalb:
 
 - alle Pfade neu fuer NAS-Docker denken
 - keine `/opt/paperless`-Annahmen im Zielsystem
+- keine versteckten absoluten Pfade in Prompts, Jobs oder UI-Defaults
+- Daten duerfen nie nur im Container-Layer liegen
 
 ### 2b. NFS-/Scanner-Ingest
 
@@ -642,6 +876,55 @@ Ziel muss sein:
 - Konfiguration liegt in Volumes
 - keine kritischen Shell-Hooks ausserhalb des Stacks
 
+### 4. Zu viele gleichzeitige Rollen fuer ein Modell
+
+Wenn derselbe `ollama`-Dienst gleichzeitig bedienen soll:
+
+- Auto-Import
+- Preview
+- Chat
+- Tag-Review
+- OCR-Experimente
+
+dann braucht der NAS-Stack klare Prioritaeten oder Limits.
+
+Sonst drohen:
+
+- Timeouts
+- schwer erklaerbare Latenz
+- falsche Rueckschluesse auf Modellqualitaet
+
+Deshalb frueh festlegen:
+
+- Thread-Default
+- gleichzeitige Jobanzahl
+- welche Rollen im Zweifel Vorrang haben
+
+### 5. Migration der bestehenden VM-Daten
+
+Der Umzug auf das NAS ist nicht nur ein Neuaufbau, sondern sehr wahrscheinlich eine Uebernahme des bestehenden Archivs.
+
+Dabei muessen getrennt gedacht werden:
+
+- Datenbank-Inhalt
+- `paperless_media`
+- `paperless_export`
+- OCR-/Index-Stand
+- Konfiguration
+- Prompt-/Tag-/Provider-Dateien
+
+Pflicht vor dem Umzug:
+
+- entscheiden, ob neu importiert oder migriert wird
+- bei Migration:
+  - DB und Media immer als zusammengehoeriges Paar behandeln
+  - keine Teilmigration nur eines von beiden
+- nach dem Restore pruefen:
+  - Dokumentanzahl
+  - Seitenanzahl plausibel
+  - Suchindex
+  - consume-Verhalten fuer neue Dokumente
+
 ## Definition of Done
 
 Der NAS-Docker-Stand ist dann erreicht, wenn:
@@ -656,6 +939,10 @@ Der NAS-Docker-Stand ist dann erreicht, wenn:
 - Containerrechte fuer Consume und Media sauber funktionieren
 - die Weboberflaeche Modellrollen und Provider sichtbar trennt
 - lokale und externe KI-Quellen technisch vorbereitet sind
+- ein Test-Backup erfolgreich wiederhergestellt wurde
+- keine produktive Funktion Root-Zugriff auf dem Host voraussetzt
+- Versionsstand und Update-Hinweis in der Weboberflaeche sichtbar sind
+- ein Container-Update die Host-Daten und Konfiguration unveraendert beibehaelt
 
 ## Datei fuer den Start auf dem NAS
 
@@ -668,13 +955,16 @@ Wenn diese Datei auf das NAS kopiert wird, sollte der naechste Arbeitsauftrag la
 Diese Dateien sollen als Naechstes entstehen:
 
 - `compose.yml`
+- `compose.override.example.yml`
 - `.env.example`
+- `.secrets.example/`
 - `config/paperless.conf.example`
 - `config/preview_config.example.json`
 - `config/tag_allowlists.example.json`
 - `config/tag_rules.example.json`
 - `config/providers.example.json`
 - `config/models.example.json`
+- `config/version.example.json`
 - `docs/NAS_DEPLOYMENT.md`
 - `scripts/bootstrap-nas-stack.sh`
 - `docs/SCANNER_INGEST.md`
