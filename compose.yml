@@ -285,6 +285,8 @@ services:
     volumes:
       - ./config/paperless-ai.env:/config/paperless-ai.env
       - ./data/paperless-ai-web:/data
+      - ./hooks/ai_enrich.py:/opt/paperless/ai_enrich.py:ro
+      - ./prompts/ai_enrich_prompt.txt:/opt/paperless/ai_enrich_prompt.txt:ro
       - ./hooks:/usr/src/paperless-ai/hooks:ro
       - ./prompts:/usr/src/paperless-ai/prompts:ro
       - ./scripts:/usr/src/paperless-ai/scripts:ro

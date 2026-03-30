@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+import ast
 import base64
 import json
 import os
@@ -141,18 +142,48 @@ def clean_name(value: str) -> str:
     return value.strip(" ,;:-")
 
 
-def parse_json_object(raw: str) -> dict:
+def _extract_json_candidate(raw: str) -> str:
     raw = raw.strip()
     if raw.startswith("```"):
-        raw = re.sub(r"^```[a-zA-Z0-9_-]*\n", "", raw)
-        raw = re.sub(r"\n```$", "", raw)
-    match = re.search(r"\{.*\}", raw, re.DOTALL)
-    if match:
-        raw = match.group(0)
-    data = json.loads(raw)
+        raw = re.sub(r"^```[a-zA-Z0-9_-]*\s*", "", raw)
+        raw = re.sub(r"\s*```$", "", raw)
+    start = raw.find("{")
+    end = raw.rfind("}")
+    if start != -1 and end != -1 and end > start:
+        return raw[start : end + 1].strip()
+    return raw
+
+
+def _coerce_json_dict(candidate: str) -> dict:
+    data = json.loads(candidate)
     if not isinstance(data, dict):
         raise ValueError("LLM response is not a JSON object")
     return data
+
+
+def parse_json_object(raw: str) -> dict:
+    candidate = _extract_json_candidate(raw)
+    try:
+        return _coerce_json_dict(candidate)
+    except Exception:
+        pass
+
+    # Some small models emit Python-style dicts or "almost JSON" with single quotes.
+    try:
+        data = ast.literal_eval(candidate)
+    except Exception:
+        data = None
+    if isinstance(data, dict):
+        return json.loads(json.dumps(data, ensure_ascii=False))
+
+    normalized = candidate
+    normalized = re.sub(r"(?<!\\)'", '"', normalized)
+    normalized = re.sub(r",(\s*[}\]])", r"\1", normalized)
+    try:
+        return _coerce_json_dict(normalized)
+    except Exception as exc:
+        preview = candidate[:400].replace("\n", "\\n")
+        raise ValueError(f"LLM response is not valid JSON: {preview}") from exc
 
 
 def load_prompt_template() -> str:
