@@ -54,6 +54,7 @@ mkdir -p \
    - Zeitzone
    - Paperless-URL
    - Host-Ports
+   - CPU-/RAM-Limits pro Container
    - API-Token spaeter nach erstem Admin-Login
    - GPU-/iGPU-Defaults pruefen
 
@@ -68,6 +69,50 @@ Grund:
 
 - `8000` ist auf diesem NAS bereits durch `portainer` belegt
 - `ollama` und `paddleocr-api` sollen nicht unnoetig direkt ins LAN exponiert werden
+
+## Ressourcen-Limits
+
+Dieser Stack setzt bewusst harte Container-Limits. Der Default darf nicht sein,
+dass jeder Dienst das gesamte NAS fuer sich beanspruchen kann.
+
+Empfohlene Startwerte aus `.env`:
+
+```dotenv
+BROKER_CPUS=0.50
+BROKER_MEM_LIMIT=256m
+DB_CPUS=1.50
+DB_MEM_LIMIT=2g
+GOTENBERG_CPUS=2.00
+GOTENBERG_MEM_LIMIT=2g
+GOTENBERG_SHM_SIZE=1g
+TIKA_CPUS=1.00
+TIKA_MEM_LIMIT=1g
+PAPERLESS_WEBSERVER_CPUS=2.00
+PAPERLESS_WEBSERVER_MEM_LIMIT=2g
+PAPERLESS_CONSUMER_CPUS=1.50
+PAPERLESS_CONSUMER_MEM_LIMIT=1536m
+PAPERLESS_TASK_QUEUE_CPUS=2.00
+PAPERLESS_TASK_QUEUE_MEM_LIMIT=2g
+PAPERLESS_SCHEDULER_CPUS=0.50
+PAPERLESS_SCHEDULER_MEM_LIMIT=512m
+OLLAMA_CPUS=6.00
+OLLAMA_MEM_LIMIT=12g
+PAPERLESS_AI_WEB_CPUS=1.00
+PAPERLESS_AI_WEB_MEM_LIMIT=1g
+PADDLEOCR_CPUS=2.00
+PADDLEOCR_MEM_LIMIT=2g
+```
+
+Einordnung:
+
+- `ollama` bekommt den groessten RAM-/CPU-Anteil.
+- `broker`, `scheduler` und `tika` bleiben bewusst klein.
+- `gotenberg` bekommt eigenes `shm_size`, weil Chromium/Rendering sonst frueh
+  an Speichergrenzen scheitern kann.
+- Diese Werte sind Startwerte, keine Dogmen. Auf kleineren NAS-Systemen muessen
+  sie reduziert werden, auf groesseren koennen sie gezielt erhoeht werden.
+- Fuer die spaetere Web-UI sollte diese Limit-Konfiguration sichtbar und
+  aenderbar gemacht werden.
 
 GPU-/iGPU-Hinweis fuer dieses NAS:
 

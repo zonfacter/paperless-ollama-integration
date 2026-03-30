@@ -3,6 +3,8 @@ services:
     image: redis:7-bookworm
     container_name: paperless-broker
     restart: unless-stopped
+    cpus: "${BROKER_CPUS:-0.50}"
+    mem_limit: "${BROKER_MEM_LIMIT:-256m}"
     healthcheck:
       test: ["CMD", "redis-cli", "ping"]
       interval: 30s
@@ -17,6 +19,8 @@ services:
     image: postgres:16-bookworm
     container_name: paperless-db
     restart: unless-stopped
+    cpus: "${DB_CPUS:-1.50}"
+    mem_limit: "${DB_MEM_LIMIT:-2g}"
     environment:
       POSTGRES_DB: ${POSTGRES_DB}
       POSTGRES_USER: ${POSTGRES_USER}
@@ -36,6 +40,9 @@ services:
     image: gotenberg/gotenberg:8
     container_name: paperless-gotenberg
     restart: unless-stopped
+    cpus: "${GOTENBERG_CPUS:-2.00}"
+    mem_limit: "${GOTENBERG_MEM_LIMIT:-2g}"
+    shm_size: "${GOTENBERG_SHM_SIZE:-1g}"
     command:
       - gotenberg
       - --chromium-disable-javascript=true
@@ -47,6 +54,8 @@ services:
     image: apache/tika:3.1.0.0
     container_name: paperless-tika
     restart: unless-stopped
+    cpus: "${TIKA_CPUS:-1.00}"
+    mem_limit: "${TIKA_MEM_LIMIT:-1g}"
     networks:
       - paperless-ai
 
@@ -54,6 +63,8 @@ services:
     image: ghcr.io/paperless-ngx/paperless-ngx:2.20.3
     container_name: paperless-webserver
     restart: unless-stopped
+    cpus: "${PAPERLESS_WEBSERVER_CPUS:-2.00}"
+    mem_limit: "${PAPERLESS_WEBSERVER_MEM_LIMIT:-2g}"
     depends_on:
       db:
         condition: service_healthy
@@ -99,6 +110,8 @@ services:
     image: ghcr.io/paperless-ngx/paperless-ngx:2.20.3
     container_name: paperless-consumer
     restart: unless-stopped
+    cpus: "${PAPERLESS_CONSUMER_CPUS:-1.50}"
+    mem_limit: "${PAPERLESS_CONSUMER_MEM_LIMIT:-1536m}"
     entrypoint: []
     working_dir: /usr/src/paperless/src
     depends_on:
@@ -137,6 +150,8 @@ services:
     image: ghcr.io/paperless-ngx/paperless-ngx:2.20.3
     container_name: paperless-task-queue
     restart: unless-stopped
+    cpus: "${PAPERLESS_TASK_QUEUE_CPUS:-2.00}"
+    mem_limit: "${PAPERLESS_TASK_QUEUE_MEM_LIMIT:-2g}"
     entrypoint: []
     working_dir: /usr/src/paperless/src
     depends_on:
@@ -179,6 +194,8 @@ services:
     image: ghcr.io/paperless-ngx/paperless-ngx:2.20.3
     container_name: paperless-scheduler
     restart: unless-stopped
+    cpus: "${PAPERLESS_SCHEDULER_CPUS:-0.50}"
+    mem_limit: "${PAPERLESS_SCHEDULER_MEM_LIMIT:-512m}"
     entrypoint: []
     working_dir: /usr/src/paperless/src
     depends_on:
@@ -216,6 +233,8 @@ services:
     image: ollama/ollama:0.13.5
     container_name: paperless-ollama
     restart: unless-stopped
+    cpus: "${OLLAMA_CPUS:-6.00}"
+    mem_limit: "${OLLAMA_MEM_LIMIT:-12g}"
     env_file:
       - ./.env
     environment:
@@ -243,6 +262,8 @@ services:
       dockerfile: docker/paperless-ai-web/Dockerfile
     container_name: paperless-ai-web
     restart: unless-stopped
+    cpus: "${PAPERLESS_AI_WEB_CPUS:-1.00}"
+    mem_limit: "${PAPERLESS_AI_WEB_MEM_LIMIT:-1g}"
     depends_on:
       webserver:
         condition: service_started
@@ -279,6 +300,8 @@ services:
       dockerfile: Dockerfile
     container_name: paperless-paddleocr-api
     restart: unless-stopped
+    cpus: "${PADDLEOCR_CPUS:-2.00}"
+    mem_limit: "${PADDLEOCR_MEM_LIMIT:-2g}"
     env_file:
       - ./.env
     environment:
