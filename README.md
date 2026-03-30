@@ -48,6 +48,14 @@ Der aktuelle Stand dieses Projekts bildet eine funktionierende Installation mit 
 - getrennte Preview-/Vision-Regeln fuer die Review-Oberflaeche
 - OCR fuer Scan-PDFs mit `force`, `deu+eng` und optionalem `tessdata_best`
 
+Fuer den NAS-Pfad gilt zusaetzlich:
+
+- `ollama` auf Intel Vulkan ist fuer kleine Modelle brauchbar, fuer groessere Modelle aber derzeit nicht durchgehend zuverlaessig
+- `qwen3.5:2b` ist auf der Iris Xe ein brauchbarer GPU-Kandidat fuer schnelle Vorschlaege
+- `qwen3.5:4b` bleibt auf CPU der beste praktikable Qualitaetskompromiss
+- ein separater `llama.cpp`-Pfad mit kompatiblen externen GGUFs ist auf dem NAS erfolgreich verifiziert
+- Details dazu stehen in [docs/NAS_RUNTIME_FINDINGS.md](docs/NAS_RUNTIME_FINDINGS.md)
+
 ## Projektinhalt
 
 - `hooks/ai_enrich.py`
@@ -78,6 +86,7 @@ Der aktuelle Stand dieses Projekts bildet eine funktionierende Installation mit 
   - Konfigurationshilfe fuer `paperless.conf`
 - `docs/`
   - Installations-, Betriebs- und Sicherheitsdokumentation
+  - NAS-Runtime-Befunde und Modellvergleiche in [docs/NAS_RUNTIME_FINDINGS.md](docs/NAS_RUNTIME_FINDINGS.md)
 - `docker/paddleocr-api/`
   - optionaler `PaddleOCR`-API-Container fuer OCR-Experimente und spaetere Integration
 - `scripts/install-paddleocr-api.sh`

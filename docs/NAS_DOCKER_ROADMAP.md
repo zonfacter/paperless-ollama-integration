@@ -14,6 +14,18 @@ sollen als eigenstaendiges, reproduzierbares Docker-Gesamtkonzept auf dem NAS la
 
 Die Datei ist bewusst so geschrieben, dass sie auf das NAS kopiert werden kann und dort als direkte Weiterarbeitsbasis dient.
 
+Ergaenzend zu dieser Ziel-Roadmap gibt es reale NAS-Laufzeitbefunde in:
+
+- [NAS_RUNTIME_FINDINGS.md](NAS_RUNTIME_FINDINGS.md)
+
+Diese Datei beschreibt also:
+
+- was gebaut werden soll
+
+und `NAS_RUNTIME_FINDINGS.md` beschreibt:
+
+- was auf der Intel-Iris-Xe-Realhardware bereits verifiziert wurde
+
 ## Leitprinzipien
 
 - Alles containerisiert, soweit sinnvoll.
@@ -78,6 +90,12 @@ NAS
   - Preview-OCR-Modell
   - Vision-/PaddleOCR-Ergaenzung
 
+Wichtiger Realitaetspunkt fuer das NAS:
+
+- `ollama` bleibt Pflichtbestandteil
+- aber die Architektur darf nicht davon ausgehen, dass groessere GPU-Modelle auf Intel Vulkan ueber `ollama` stabil laufen
+- deshalb sollte von Anfang an Platz fuer eine zweite lokale Runtime bestehen
+
 ### 2b. Externe KI-Quellen
 
 Das Zielsystem darf nicht nur lokale `ollama`-Container voraussetzen.
@@ -92,6 +110,17 @@ Das heisst:
 
 - der KI-Layer braucht ein Provider-Modell
 - nicht nur einen fest verdrahteten lokalen Container
+
+### 2c. Zweite lokale Runtime
+
+Fuer das NAS sollte ein optionaler zweiter lokaler Runtime-Pfad mitgedacht werden:
+
+- `llama.cpp`
+
+Begruendung:
+
+- auf der Intel Iris Xe war `llama.cpp` mit kompatiblen externen GGUFs bereits technisch erfolgreich
+- dieser Pfad kann fuer GPU-Modelle relevant werden, die in `ollama` auf Intel Vulkan instabil sind
 
 ### 3. Review-/Admin-Layer
 
@@ -175,6 +204,7 @@ Dort muss spaeter moeglich sein:
 Dort muss spaeter moeglich sein:
 
 - lokales `ollama` aktivieren
+- lokales `llama.cpp` aktivieren
 - externes `ollama` per URL eintragen
 - alternative KI-Docker-Dienste eintragen
 - Healthcheck / Verbindungstest ausfuehren

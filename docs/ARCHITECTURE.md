@@ -2,6 +2,11 @@
 
 ## Ueberblick
 
+Hinweis:
+
+- diese Datei beschreibt das allgemeine Zielbild
+- die realen NAS-Runtime-Erkenntnisse fuer Intel Iris Xe, `ollama` und `llama.cpp` stehen zusaetzlich in [NAS_RUNTIME_FINDINGS.md](NAS_RUNTIME_FINDINGS.md)
+
 Das System besteht in diesem Setup aus zwei Infrastrukturebenen und mehreren lokalen Diensten:
 
 1. NAS / Hypervisor
@@ -146,6 +151,19 @@ Wichtig:
 - keine direkte Internetnutzung durch das Modell selbst
 - kann technisch auch zusaetzliche OCR-/Vision-Modelle fuer die Review-Stufe anbinden
 - eignet sich in einer CPU-VM praktisch vor allem fuer Textmodelle und bewusst begrenzte Vorschaupfade
+
+Wichtige NAS-Erkenntnis:
+
+- auf Intel Iris Xe ist `ollama` fuer kleine GPU-Modelle brauchbar
+- fuer groessere Modelle war der Intel-Vulkan-Pfad in den Tests oft instabil oder qualitativ kaputt
+- fuer stabile Qualitaet ist auf dem NAS CPU-only weiter der Referenzpfad
+
+### Optionale zweite Runtime: `llama.cpp`
+
+- kann als separater Docker-Dienst neben `ollama` betrieben werden
+- ist fuer kompatible externe GGUFs auf dem NAS erfolgreich mit Vulkan verifiziert
+- eignet sich besonders dann, wenn ein Modell ueber `ollama` auf Intel Vulkan instabil ist
+- sollte als optionaler Provider gedacht werden, nicht als stiller Ersatz
 
 ### Browser-Zugriff
 

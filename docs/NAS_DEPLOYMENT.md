@@ -9,6 +9,15 @@ Diese Datei beschreibt den ersten sauberen NAS-Start fuer den Docker-MVP:
 - `paperless-ai-web` als naechste Stufe ueber Compose-Profil `ui`
 - optional spaeter `paddleocr-api`
 
+Ergaenzende reale Laufzeitbefunde fuer dieses NAS stehen in:
+
+- [NAS_RUNTIME_FINDINGS.md](NAS_RUNTIME_FINDINGS.md)
+
+Wichtig:
+
+- diese Datei beschreibt den Betriebs- und Startpfad
+- `NAS_RUNTIME_FINDINGS.md` beschreibt die bereits verifizierten Modell- und Runtime-Grenzen auf Intel Iris Xe
+
 ## Empfohlener Host-Pfad
 
 ```text
@@ -136,6 +145,13 @@ OLLAMA_INTEL_GPU=1
 PADDLEOCR_DEVICE=cpu
 ```
 
+Wichtige Einordnung:
+
+- die iGPU ist fuer kleine Modelle ueber `ollama` brauchbar
+- fuer groessere Modelle war `ollama` auf Intel Vulkan in den Tests oft instabil oder qualitativ kaputt
+- fuer stabile Qualitaet bleibt auf diesem NAS CPU-only der Referenzpfad
+- wenn spaeter groessere GPU-Modelle lokal genutzt werden sollen, sollte ein optionaler zweiter Runtime-Pfad mit `llama.cpp` vorgesehen werden
+
 ## Erster Start
 
 Zunaechst nur Basisdienste plus `webserver`, damit die ersten Migrationen ohne Lock-Konflikte sauber durchlaufen:
@@ -200,3 +216,7 @@ sudo docker exec paperless-paddleocr-api ls -l /dev/dri
   - Config sichern
 - `ollama` sollte auf diesem NAS zuerst CPU-only und mit klaren Thread-Limits gedacht werden.
 - GPU-/iGPU-Mapping ist vorbereitet, aber echte Beschleunigung gilt erst als bestaetigt, wenn die Render-Devices auch im Container sichtbar sind und der Zielruntime-Pfad sie wirklich nutzt.
+- fuer den realen Modellbetrieb auf diesem NAS gilt aktuell:
+  - `qwen3.5:2b` ist ein brauchbarer lokaler GPU-Kandidat
+  - `qwen3.5:4b` ist der praktikable CPU-Qualitaetskandidat
+  - `llama.cpp` sollte als optionaler spaeterer GPU-Pfad mit kompatiblen externen GGUFs mitgedacht werden
