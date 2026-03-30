@@ -3,6 +3,7 @@ import base64
 import html
 import json
 import importlib.util
+import math
 import os
 import re
 import shlex
@@ -724,6 +725,10 @@ HTML = """<!doctype html>
               Review Workspace
               <small>Dokumente suchen, Vorschau erzeugen, KI-Vorschlag uebernehmen.</small>
             </button>
+            <button class="nav-btn" data-view-target="tasks-view" type="button">
+              Task Manager
+              <small>Hintergrundjobs, Laufstatus und Logs ohne Shell verfolgen.</small>
+            </button>
             <button class="nav-btn" data-view-target="control-view" type="button">
               Steuerung
               <small>Modelle, Prompt, OCR-Kontext, Timeout und Fallback verwalten.</small>
@@ -918,6 +923,58 @@ HTML = """<!doctype html>
                 </label>
                 <div id="backfill-status" class="statusline">__BACKFILL_STATUS__</div>
                 <div id="backfill-log" class="logbox">__BACKFILL_LOG__</div>
+              </div>
+            </section>
+            <section id="tasks-view" class="view">
+              <div class="section">
+                <div class="section-head">
+                  <div>
+                    <h2>Task Manager</h2>
+                    <p>
+                      Ueberwache laufende und letzte Hintergrundjobs direkt im Browser. So kannst du
+                      die Verbindung trennen und spaeter einfach wieder in den aktuellen Lauf einsteigen.
+                    </p>
+                  </div>
+                  <div class="summary-bar">
+                    <span class="pill">Backfill</span>
+                    <span class="pill">Persistent</span>
+                    <span class="pill">Ohne Shell</span>
+                  </div>
+                </div>
+                <div class="actions">
+                  <button id="tasks-refresh" class="secondary">Aufgaben aktualisieren</button>
+                  <button id="tasks-show-latest" class="secondary">Letzten Job laden</button>
+                </div>
+                <div id="tasks-status" class="statusline">Jobliste wird geladen...</div>
+                <div class="detail-grid">
+                  <div class="detail-card">
+                    <h3>Systemlast</h3>
+                    <div class="detail-sub">Live-Metriken fuer CPU, RAM, Datentraeger und GPU-Status dieser VM.</div>
+                    <div id="tasks-system-metrics" class="meta-table">
+                      <div class="doc-empty">Systemmetriken werden geladen...</div>
+                    </div>
+                  </div>
+                </div>
+                <div class="detail-grid">
+                  <div class="detail-card">
+                    <h3>Hintergrundjobs</h3>
+                    <div class="detail-sub">Die neuesten Backfill-Laeufe mit Status, Dokumentanzahl und Startzeit.</div>
+                    <div id="tasks-list" class="doc-list">
+                      <div class="doc-empty">Noch keine Hintergrundjobs bekannt.</div>
+                    </div>
+                  </div>
+                  <div class="detail-card">
+                    <h3>Job-Details</h3>
+                    <div class="detail-sub">Auswahl laden, aktuellen Fortschritt ansehen und direkt zum Log springen.</div>
+                    <div id="tasks-detail-meta" class="meta-table">
+                      <div class="doc-empty">Noch kein Job ausgewaehlt.</div>
+                    </div>
+                    <div class="actions">
+                      <button id="tasks-refresh-selected" class="secondary">Ausgewaehlten Job aktualisieren</button>
+                    </div>
+                    <div id="tasks-detail-log" class="logbox">Bereit.</div>
+                  </div>
+                </div>
               </div>
             </section>
             <section id="control-view" class="view">
@@ -1251,6 +1308,14 @@ HTML = """<!doctype html>
     const backfillClearReviewFirstEl = document.getElementById('backfill-clear-review-first');
     const backfillStatusEl = document.getElementById('backfill-status');
     const backfillLogEl = document.getElementById('backfill-log');
+    const tasksRefreshBtn = document.getElementById('tasks-refresh');
+    const tasksShowLatestBtn = document.getElementById('tasks-show-latest');
+    const tasksRefreshSelectedBtn = document.getElementById('tasks-refresh-selected');
+    const tasksStatusEl = document.getElementById('tasks-status');
+    const tasksListEl = document.getElementById('tasks-list');
+    const tasksDetailMetaEl = document.getElementById('tasks-detail-meta');
+    const tasksDetailLogEl = document.getElementById('tasks-detail-log');
+    const tasksSystemMetricsEl = document.getElementById('tasks-system-metrics');
     const docSearchEl = document.getElementById('doc-search');
     const docLimitEl = document.getElementById('doc-limit');
     const docRefreshBtn = document.getElementById('doc-refresh');
@@ -1283,6 +1348,7 @@ HTML = """<!doctype html>
     let activeProposal = null;
     let activePreviewJobId = null;
     let activeBackfillJobId = null;
+    let activeTaskJobId = null;
     let availableModelNames = [];
     const cfgTagColorControl = bindColorInput(cfgTagColorEl, cfgTagColorPickerEl, '#4f6bed');
     const cfgReviewTagColorControl = bindColorInput(cfgReviewTagColorEl, cfgReviewTagColorPickerEl, '#7dd3fc');
@@ -2031,10 +2097,113 @@ HTML = """<!doctype html>
       backfillLogEl.scrollTop = backfillLogEl.scrollHeight;
     }
 
+    function renderTaskJobList(jobs) {
+      if (!Array.isArray(jobs) || !jobs.length) {
+        tasksListEl.innerHTML = '<div class="doc-empty">Noch keine Hintergrundjobs bekannt.</div>';
+        return;
+      }
+      tasksListEl.innerHTML = jobs.map(job => {
+        const countText = job.document_count ? `${job.document_count} Dokumente` : 'Dokumentanzahl unbekannt';
+        const startedText = job.started_at || 'Startzeit unbekannt';
+        const statusText = job.status || 'unbekannt';
+        const activeClass = activeTaskJobId === job.id ? ' active' : '';
+        return `
+          <button class="doc-row${activeClass}" data-task-job-id="${job.id}" type="button">
+            <div class="doc-main">
+              <div class="doc-title">${job.id}</div>
+              <div class="doc-meta">${countText} · ${startedText}</div>
+              <div class="doc-meta"><span class="pill">${statusText}</span></div>
+            </div>
+          </button>
+        `;
+      }).join('');
+      tasksListEl.querySelectorAll('[data-task-job-id]').forEach(btn => {
+        btn.addEventListener('click', () => loadBackfillJobStatus(btn.dataset.taskJobId));
+      });
+    }
+
+    function renderTaskJobDetail(job) {
+      if (!job) {
+        tasksDetailMetaEl.innerHTML = '<div class="doc-empty">Noch kein Job ausgewaehlt.</div>';
+        tasksDetailLogEl.textContent = 'Bereit.';
+        tasksDetailLogEl.scrollTop = tasksDetailLogEl.scrollHeight;
+        return;
+      }
+      activeTaskJobId = job.id || null;
+      tasksDetailMetaEl.innerHTML = `
+        <div class="meta-row"><div class="meta-label">Job-ID</div><div>${formatValue(job.id)}</div></div>
+        <div class="meta-row"><div class="meta-label">Status</div><div>${formatValue(job.status)}</div></div>
+        <div class="meta-row"><div class="meta-label">Dokumente</div><div>${formatValue(job.document_count)}</div></div>
+        <div class="meta-row"><div class="meta-label">Gestartet</div><div>${formatValue(job.started_at)}</div></div>
+        <div class="meta-row"><div class="meta-label">Beendet</div><div>${formatValue(job.finished_at)}</div></div>
+        <div class="meta-row"><div class="meta-label">Returncode</div><div>${formatValue(job.returncode)}</div></div>
+        <div class="meta-row"><div class="meta-label">Logdatei</div><div>${formatValue(job.log_path)}</div></div>
+        <div class="meta-row"><div class="meta-label">Vorbereitung</div><div>${formatValue(job.clear_summary)}</div></div>
+      `;
+      const lines = [];
+      if (job.tail) {
+        lines.push(job.tail);
+      } else {
+        lines.push('Noch keine Logausgabe vorhanden.');
+      }
+      tasksDetailLogEl.textContent = lines.join('\\n');
+      tasksDetailLogEl.scrollTop = tasksDetailLogEl.scrollHeight;
+      renderTaskJobList(window.__taskJobsCache || []);
+    }
+
+    async function loadTaskJobs() {
+      tasksStatusEl.textContent = 'Jobliste wird geladen...';
+      tasksStatusEl.className = 'statusline';
+      try {
+        const res = await fetch('/api/paperless/backfill-jobs');
+        const data = await res.json();
+        if (!res.ok) throw new Error(data.error || 'Fehler');
+        const jobs = Array.isArray(data.jobs) ? data.jobs : [];
+        window.__taskJobsCache = jobs;
+        renderTaskJobList(jobs);
+        if (jobs.length) {
+          tasksStatusEl.textContent = `${jobs.length} Hintergrundjob(s) gefunden.`;
+        } else {
+          tasksStatusEl.textContent = 'Noch kein Hintergrundjob bekannt.';
+        }
+        if (!activeTaskJobId && jobs.length) {
+          await loadBackfillJobStatus(jobs[0].id);
+        } else if (activeTaskJobId) {
+          renderTaskJobList(jobs);
+        } else {
+          renderTaskJobDetail(null);
+        }
+      } catch (err) {
+        tasksStatusEl.textContent = `Fehler beim Laden der Jobliste: ${err.message}`;
+        tasksStatusEl.className = 'statusline warn';
+      }
+    }
+
+    async function loadSystemMetrics() {
+      try {
+        const res = await fetch('/api/system/metrics');
+        const data = await res.json();
+        if (!res.ok) throw new Error(data.error || 'Fehler');
+        const gpuSummary = data.gpu && data.gpu.available
+          ? `${data.gpu.label || 'GPU erkannt'}${data.gpu.devices && data.gpu.devices.length ? ` · ${data.gpu.devices.join(', ')}` : ''}`
+          : (data.gpu && data.gpu.note) || 'Keine nutzbare GPU in dieser VM sichtbar';
+        tasksSystemMetricsEl.innerHTML = `
+          <div class="meta-row"><div class="meta-label">CPU-Auslastung</div><div>${formatValue(data.cpu_percent)} %</div></div>
+          <div class="meta-row"><div class="meta-label">Load Average</div><div>${formatValue(data.load_average)}</div></div>
+          <div class="meta-row"><div class="meta-label">RAM</div><div>${formatValue(data.memory_used_human)} / ${formatValue(data.memory_total_human)} (${formatValue(data.memory_percent)} %)</div></div>
+          <div class="meta-row"><div class="meta-label">Datentraeger /</div><div>${formatValue(data.disk_used_human)} / ${formatValue(data.disk_total_human)} (${formatValue(data.disk_percent)} % frei: ${formatValue(data.disk_free_human)})</div></div>
+          <div class="meta-row"><div class="meta-label">GPU</div><div>${formatValue(gpuSummary)}</div></div>
+        `;
+      } catch (err) {
+        tasksSystemMetricsEl.innerHTML = `<div class="doc-empty">Fehler beim Laden der Systemmetriken: ${err.message}</div>`;
+      }
+    }
+
     async function loadBackfillJobStatus(jobId) {
       const cleanJobId = jobId || activeBackfillJobId;
       if (!cleanJobId) {
         renderBackfillJob(null);
+        renderTaskJobDetail(null);
         return;
       }
       try {
@@ -2043,9 +2212,12 @@ HTML = """<!doctype html>
         if (!res.ok) throw new Error(data.error || 'Fehler');
         setBackfillJobState(data.id || cleanJobId);
         renderBackfillJob(data);
+        renderTaskJobDetail(data);
       } catch (err) {
         backfillStatusEl.textContent = `Fehler beim Laden des Job-Status: ${err.message}`;
         backfillStatusEl.className = 'statusline warn';
+        tasksStatusEl.textContent = `Fehler beim Laden des Job-Status: ${err.message}`;
+        tasksStatusEl.className = 'statusline warn';
       }
     }
 
@@ -2056,10 +2228,12 @@ HTML = """<!doctype html>
         if (!res.ok) throw new Error(data.error || 'Fehler');
         if (!data.id) {
           renderBackfillJob(null);
+          renderTaskJobDetail(null);
           return;
         }
         setBackfillJobState(data.id);
         renderBackfillJob(data);
+        renderTaskJobDetail(data);
       } catch (_) {
         try {
           const storedJobId = localStorage.getItem('paperless-backfill-job-id');
@@ -2201,6 +2375,12 @@ HTML = """<!doctype html>
     backfillClearReviewBtn.addEventListener('click', clearReviewTags);
     backfillRunBtn.addEventListener('click', () => runBackfill(false));
     backfillRefreshJobBtn.addEventListener('click', () => loadBackfillJobStatus());
+    tasksRefreshBtn.addEventListener('click', async () => {
+      await loadTaskJobs();
+      await loadSystemMetrics();
+    });
+    tasksShowLatestBtn.addEventListener('click', loadLatestBackfillJobStatus);
+    tasksRefreshSelectedBtn.addEventListener('click', () => loadBackfillJobStatus(activeTaskJobId || activeBackfillJobId));
 
     loadModels().catch(() => {
       statusEl.textContent = 'Modelle konnten nicht geladen werden.';
@@ -2215,6 +2395,8 @@ HTML = """<!doctype html>
     loadPrompt();
     loadDocuments();
     loadLatestBackfillJobStatus();
+    loadTaskJobs();
+    loadSystemMetrics();
   </script>
 </body>
 </html>
@@ -3904,6 +4086,121 @@ def read_latest_backfill_job() -> dict | None:
         return None
 
 
+def list_backfill_jobs() -> list[dict]:
+    with BACKFILL_JOBS_LOCK:
+        if not BACKFILL_JOBS:
+            _load_backfill_state()
+        discovered = _discover_latest_backfill_job_from_logs()
+        if discovered and discovered["id"] not in BACKFILL_JOBS:
+            BACKFILL_JOBS[discovered["id"]] = discovered
+            _save_backfill_state()
+        jobs = [dict(value) for value in BACKFILL_JOBS.values() if isinstance(value, dict)]
+    def _sort_key(job: dict) -> tuple[str, str]:
+        return (str(job.get("started_at") or ""), str(job.get("id") or ""))
+    jobs.sort(key=_sort_key, reverse=True)
+    return jobs
+
+
+def _read_cpu_times() -> tuple[int, int]:
+    line = Path("/proc/stat").read_text(encoding="utf-8", errors="replace").splitlines()[0]
+    parts = [int(value) for value in line.split()[1:]]
+    idle = parts[3] + (parts[4] if len(parts) > 4 else 0)
+    total = sum(parts)
+    return total, idle
+
+
+def _read_cpu_percent(sample_seconds: float = 0.15) -> float:
+    try:
+        total_1, idle_1 = _read_cpu_times()
+        time.sleep(sample_seconds)
+        total_2, idle_2 = _read_cpu_times()
+    except Exception:
+        return 0.0
+    total_delta = max(total_2 - total_1, 1)
+    idle_delta = max(idle_2 - idle_1, 0)
+    busy = max(total_delta - idle_delta, 0)
+    return round((busy / total_delta) * 100, 1)
+
+
+def _bytes_to_human(value: int) -> str:
+    suffixes = ["B", "KB", "MB", "GB", "TB"]
+    size = float(max(value, 0))
+    for suffix in suffixes:
+        if size < 1024 or suffix == suffixes[-1]:
+            if suffix == "B":
+                return f"{int(size)} {suffix}"
+            return f"{size:.1f} {suffix}"
+        size /= 1024
+    return f"{value} B"
+
+
+def read_system_metrics() -> tuple[int, dict]:
+    cpu_percent = _read_cpu_percent()
+    try:
+        load_avg = os.getloadavg()
+        load_average = ", ".join(f"{value:.2f}" for value in load_avg)
+    except Exception:
+        load_average = "-"
+    meminfo = {}
+    try:
+        for line in Path("/proc/meminfo").read_text(encoding="utf-8", errors="replace").splitlines():
+            if ":" not in line:
+                continue
+            key, value = line.split(":", 1)
+            meminfo[key.strip()] = value.strip()
+    except Exception:
+        meminfo = {}
+    mem_total_kb = int((meminfo.get("MemTotal", "0 kB").split() or ["0"])[0])
+    mem_available_kb = int((meminfo.get("MemAvailable", "0 kB").split() or ["0"])[0])
+    mem_used_kb = max(mem_total_kb - mem_available_kb, 0)
+    mem_percent = round((mem_used_kb / mem_total_kb) * 100, 1) if mem_total_kb else 0.0
+    stat = os.statvfs("/")
+    disk_total = stat.f_frsize * stat.f_blocks
+    disk_free = stat.f_frsize * stat.f_bavail
+    disk_used = max(disk_total - disk_free, 0)
+    disk_percent = round((disk_used / disk_total) * 100, 1) if disk_total else 0.0
+    gpu_devices = []
+    dri_root = Path("/dev/dri")
+    if dri_root.exists():
+        for child in sorted(dri_root.iterdir()):
+            gpu_devices.append(child.name)
+    gpu_available = bool(gpu_devices)
+    gpu_note = ""
+    if not gpu_available:
+        try:
+            lspci = subprocess.run(
+                ["lspci"],
+                capture_output=True,
+                text=True,
+                timeout=5,
+                check=False,
+            )
+            gpu_note = "Keine nutzbare GPU in der VM sichtbar"
+            lines = [line.strip() for line in lspci.stdout.splitlines() if any(token in line.lower() for token in ("vga", "3d controller", "display"))]
+            if lines:
+                gpu_note = "Nur allgemeiner Video-Adapter sichtbar"
+        except Exception:
+            gpu_note = "Keine nutzbare GPU in der VM sichtbar"
+    payload = {
+        "cpu_percent": cpu_percent,
+        "load_average": load_average,
+        "memory_total_human": _bytes_to_human(mem_total_kb * 1024),
+        "memory_used_human": _bytes_to_human(mem_used_kb * 1024),
+        "memory_percent": mem_percent,
+        "disk_total_human": _bytes_to_human(disk_total),
+        "disk_used_human": _bytes_to_human(disk_used),
+        "disk_free_human": _bytes_to_human(disk_free),
+        "disk_percent": disk_percent,
+        "gpu": {
+            "available": gpu_available,
+            "devices": gpu_devices,
+            "label": "GPU / iGPU erkannt" if gpu_available else "",
+            "note": gpu_note,
+        },
+    }
+    return 200, payload
+
+
 def _tail_text_file(path: str, max_chars: int = 12000) -> str:
     try:
         text = Path(path).read_text(encoding="utf-8", errors="replace")
@@ -4142,10 +4439,24 @@ class Handler(BaseHTTPRequestHandler):
                 status, payload = 500, {"error": str(exc)}
             self._send(status, json.dumps(payload).encode("utf-8"), "application/json")
             return
+        if self.path == "/api/paperless/backfill-jobs":
+            try:
+                status, payload = 200, {"jobs": list_backfill_jobs()}
+            except Exception as exc:
+                status, payload = 500, {"error": str(exc)}
+            self._send(status, json.dumps(payload).encode("utf-8"), "application/json")
+            return
         if self.path.startswith("/api/paperless/backfill-jobs/"):
             job_id = self.path.rsplit("/", 1)[-1]
             try:
                 status, payload = read_backfill_job_payload(job_id)
+            except Exception as exc:
+                status, payload = 500, {"error": str(exc)}
+            self._send(status, json.dumps(payload).encode("utf-8"), "application/json")
+            return
+        if self.path == "/api/system/metrics":
+            try:
+                status, payload = read_system_metrics()
             except Exception as exc:
                 status, payload = 500, {"error": str(exc)}
             self._send(status, json.dumps(payload).encode("utf-8"), "application/json")
