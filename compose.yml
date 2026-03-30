@@ -213,7 +213,7 @@ services:
       - paperless-ai
 
   ollama:
-    image: ollama/ollama:0.12.3
+    image: ollama/ollama:0.13.5
     container_name: paperless-ollama
     restart: unless-stopped
     env_file:
@@ -221,6 +221,7 @@ services:
     environment:
       OLLAMA_HOST: ${OLLAMA_HOST}
       OLLAMA_INTEL_GPU: ${OLLAMA_INTEL_GPU:-1}
+      OLLAMA_VULKAN: ${OLLAMA_VULKAN:-1}
     healthcheck:
       test: ["CMD-SHELL", "ollama list >/dev/null 2>&1"]
       interval: 30s
