@@ -274,8 +274,8 @@ services:
   paddleocr-api:
     profiles: ["ocr-extra"]
     build:
-      context: .
-      dockerfile: docker/paddleocr-api/Dockerfile
+      context: ./docker/paddleocr-api
+      dockerfile: Dockerfile
     container_name: paperless-paddleocr-api
     restart: unless-stopped
     env_file:
