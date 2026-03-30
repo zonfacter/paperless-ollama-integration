@@ -230,7 +230,7 @@ services:
       - paperless-ai
 
   ollama:
-    image: ollama/ollama:0.13.5
+    image: ollama/ollama:latest
     container_name: paperless-ollama
     restart: unless-stopped
     cpus: "${OLLAMA_CPUS:-6.00}"
