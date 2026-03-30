@@ -5,6 +5,7 @@ import json
 import importlib.util
 import os
 import re
+import shlex
 import subprocess
 import tempfile
 import threading
@@ -3911,6 +3912,29 @@ def _tail_text_file(path: str, max_chars: int = 12000) -> str:
     return text[-max_chars:]
 
 
+def _process_alive(pid: int | None) -> bool:
+    if not pid:
+        return False
+    try:
+        os.kill(int(pid), 0)
+    except OSError:
+        return False
+    return True
+
+
+def _extract_backfill_completion(log_text: str) -> tuple[str | None, int | None]:
+    status = None
+    returncode = None
+    match = re.search(r"Job finished with returncode (-?\d+)", log_text)
+    if match:
+        returncode = int(match.group(1))
+        status = "done" if returncode == 0 else "error"
+    elif "Job failed before completion:" in log_text:
+        status = "error"
+        returncode = -1
+    return status, returncode
+
+
 def read_backfill_job_payload(job_id: str) -> tuple[int, dict]:
     job = read_backfill_job(job_id)
     if job is None:
@@ -3918,7 +3942,17 @@ def read_backfill_job_payload(job_id: str) -> tuple[int, dict]:
     payload = dict(job)
     log_path = payload.get("log_path")
     if log_path:
-        payload["tail"] = _tail_text_file(str(log_path))
+        full_tail = _tail_text_file(str(log_path), max_chars=40000)
+        payload["tail"] = full_tail[-12000:]
+        completion_status, returncode = _extract_backfill_completion(full_tail)
+        if completion_status:
+            payload["status"] = completion_status
+        elif payload.get("status") == "running" and not _process_alive(payload.get("pid")):
+            payload["status"] = "error"
+            payload["error"] = "Hintergrundprozess laeuft nicht mehr"
+        if returncode is not None:
+            payload["returncode"] = returncode
+        store_backfill_job(job_id, payload)
     return 200, payload
 
 
@@ -3929,7 +3963,17 @@ def read_latest_backfill_job_payload() -> tuple[int, dict]:
     payload = dict(job)
     log_path = payload.get("log_path")
     if log_path:
-        payload["tail"] = _tail_text_file(str(log_path))
+        full_tail = _tail_text_file(str(log_path), max_chars=40000)
+        payload["tail"] = full_tail[-12000:]
+        completion_status, returncode = _extract_backfill_completion(full_tail)
+        if completion_status:
+            payload["status"] = completion_status
+        elif payload.get("status") == "running" and not _process_alive(payload.get("pid")):
+            payload["status"] = "error"
+            payload["error"] = "Hintergrundprozess laeuft nicht mehr"
+        if returncode is not None:
+            payload["returncode"] = returncode
+        store_backfill_job(str(payload["id"]), payload)
     return 200, payload
 
 
@@ -4017,42 +4061,31 @@ def build_backfill_command_and_env(payload: dict) -> tuple[list[str], dict[str, 
     return cmd, child_env
 
 
-def run_backfill_job(job_id: str, cmd: list[str], child_env: dict[str, str], log_path: str) -> None:
+def launch_detached_backfill_process(job_id: str, cmd: list[str], child_env: dict[str, str], log_path: str) -> int:
     started = time.strftime("%Y-%m-%d %H:%M:%S")
-    try:
-        with open(log_path, "a", encoding="utf-8") as handle:
-            handle.write(f"[{started}] Starting job {job_id}\n")
-            handle.write("Command: " + " ".join(cmd) + "\n\n")
-            handle.flush()
-            process = subprocess.Popen(
-                cmd,
-                env=child_env,
-                stdout=handle,
-                stderr=subprocess.STDOUT,
-                text=True,
-            )
-            current = read_backfill_job(job_id) or {}
-            current.update({"pid": process.pid, "status": "running"})
-            store_backfill_job(job_id, current)
-            returncode = process.wait()
-            finished = time.strftime("%Y-%m-%d %H:%M:%S")
-            handle.write(f"\n[{finished}] Job finished with returncode {returncode}\n")
-            handle.flush()
-        final = read_backfill_job(job_id) or {}
-        final.update(
-            {
-                "status": "done" if returncode == 0 else "error",
-                "returncode": returncode,
-                "finished_at": finished,
-            }
-        )
-        store_backfill_job(job_id, final)
-    except Exception as exc:
-        finished = time.strftime("%Y-%m-%d %H:%M:%S")
-        Path(log_path).write_text(f"[{finished}] Job failed before completion: {exc}\n", encoding="utf-8")
-        final = read_backfill_job(job_id) or {}
-        final.update({"status": "error", "error": str(exc), "finished_at": finished, "returncode": -1})
-        store_backfill_job(job_id, final)
+    Path(log_path).write_text(
+        f"[{started}] Starting job {job_id}\nCommand: {' '.join(cmd)}\n\n",
+        encoding="utf-8",
+    )
+    quoted_cmd = " ".join(shlex.quote(part) for part in cmd)
+    quoted_log = shlex.quote(log_path)
+    wrapper = (
+        f"{quoted_cmd} >> {quoted_log} 2>&1; "
+        "rc=$?; "
+        f"printf '\\n[%s] Job finished with returncode %s\\n' \"$(date '+%Y-%m-%d %H:%M:%S')\" \"$rc\" >> {quoted_log}; "
+        "exit 0"
+    )
+    process = subprocess.Popen(
+        ["/bin/bash", "-lc", wrapper],
+        env=child_env,
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+        stdin=subprocess.DEVNULL,
+        start_new_session=True,
+        close_fds=True,
+        text=False,
+    )
+    return process.pid
 
 
 def start_paperless_backfill(payload: dict) -> tuple[int, dict]:
@@ -4075,13 +4108,10 @@ def start_paperless_backfill(payload: dict) -> tuple[int, dict]:
         if status != 200:
             return status, summary
         job["clear_summary"] = f"{summary.get('updated_documents', 0)} Dokumente bereinigt"
+    pid = launch_detached_backfill_process(job_id, cmd, child_env, log_path)
+    job["pid"] = pid
+    job["status"] = "running"
     store_backfill_job(job_id, job)
-    worker = threading.Thread(
-        target=run_backfill_job,
-        args=(job_id, cmd, child_env, log_path),
-        daemon=True,
-    )
-    worker.start()
     return 200, {"job": job}
 
 
