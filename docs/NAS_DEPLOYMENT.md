@@ -55,6 +55,7 @@ mkdir -p \
    - Paperless-URL
    - Host-Ports
    - API-Token spaeter nach erstem Admin-Login
+   - GPU-/iGPU-Defaults pruefen
 
 Empfohlener Start auf diesem NAS:
 
@@ -67,6 +68,28 @@ Grund:
 
 - `8000` ist auf diesem NAS bereits durch `portainer` belegt
 - `ollama` und `paddleocr-api` sollen nicht unnoetig direkt ins LAN exponiert werden
+
+GPU-/iGPU-Hinweis fuer dieses NAS:
+
+- Auf dem UGREEN-Host ist eine Intel-iGPU vorhanden.
+- Vor produktiver GPU-Nutzung immer pruefen:
+
+```bash
+ls -l /dev/dri
+lspci | grep -i -E 'vga|3d|display'
+```
+
+- Nur wenn `renderD*` sichtbar ist, gilt die iGPU als wirklich nutzbar.
+- Dieser Compose-Stack mappt `/dev/dri` in `ollama` und optional `paddleocr-api`.
+- Fuer `ollama` ist das die richtige Voraussetzung fuer Intel-iGPU-/Vulkan-Tests.
+- `paddleocr-api` bekommt das Device ebenfalls, bleibt aber standardmaessig auf `cpu`, weil PaddleOCR in diesem Stack auf Intel-iGPU nicht als robuster Default betrachtet werden sollte.
+
+Empfohlene `.env`-Werte:
+
+```dotenv
+OLLAMA_INTEL_GPU=1
+PADDLEOCR_DEVICE=cpu
+```
 
 ## Erster Start
 
@@ -82,6 +105,7 @@ Danach pruefen:
 sudo docker compose ps
 sudo docker compose logs --tail=100 webserver
 sudo docker compose logs --tail=100 ollama
+sudo docker exec paperless-ollama ls -l /dev/dri
 ```
 
 Wenn `webserver` gesund ist, erst die restlichen Paperless-Dienste starten:
@@ -117,6 +141,7 @@ curl -sS http://127.0.0.1:3000/ | head
 
 ```bash
 sudo docker compose --profile ocr-extra up -d paddleocr-api
+sudo docker exec paperless-paddleocr-api ls -l /dev/dri
 ```
 
 ## Wichtige Hinweise
@@ -129,3 +154,4 @@ sudo docker compose --profile ocr-extra up -d paddleocr-api
   - Media sichern
   - Config sichern
 - `ollama` sollte auf diesem NAS zuerst CPU-only und mit klaren Thread-Limits gedacht werden.
+- GPU-/iGPU-Mapping ist vorbereitet, aber echte Beschleunigung gilt erst als bestaetigt, wenn die Render-Devices auch im Container sichtbar sind und der Zielruntime-Pfad sie wirklich nutzt.
