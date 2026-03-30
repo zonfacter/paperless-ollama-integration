@@ -576,6 +576,107 @@ HTML = """<!doctype html>
       font-size: 19px;
       letter-spacing: -0.02em;
     }
+    .provider-split {
+      display: grid;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      gap: 14px;
+      margin-top: 16px;
+    }
+    .provider-panel {
+      display: grid;
+      gap: 14px;
+      padding: 18px;
+      border-radius: 20px;
+      border: 1px solid var(--line);
+      box-shadow: 0 16px 32px rgba(15, 23, 40, 0.06);
+    }
+    .provider-panel.local {
+      background: linear-gradient(180deg, rgba(236, 253, 245, 0.94), rgba(255,255,255,0.92));
+      border-color: rgba(14, 159, 110, 0.18);
+    }
+    .provider-panel.remote {
+      background: linear-gradient(180deg, rgba(239, 246, 255, 0.94), rgba(255,255,255,0.92));
+      border-color: rgba(11, 107, 203, 0.16);
+    }
+    .provider-panel-head {
+      display: flex;
+      justify-content: space-between;
+      gap: 12px;
+      align-items: start;
+    }
+    .provider-panel-head h3 {
+      margin: 0;
+      font-size: 18px;
+      letter-spacing: -0.02em;
+    }
+    .provider-panel-head p {
+      margin: 6px 0 0;
+      color: var(--muted);
+      font-size: 13px;
+      line-height: 1.5;
+    }
+    .provider-badge {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      min-width: 82px;
+      padding: 7px 12px;
+      border-radius: 999px;
+      border: 1px solid var(--line);
+      background: rgba(255,255,255,0.88);
+      color: var(--muted);
+      font-size: 11px;
+      font-weight: 800;
+      letter-spacing: 0.08em;
+      text-transform: uppercase;
+    }
+    .provider-badge.active {
+      background: linear-gradient(135deg, var(--accent), #2e89ea);
+      color: white;
+      border-color: transparent;
+      box-shadow: 0 12px 24px rgba(11, 107, 203, 0.18);
+    }
+    .provider-diagram {
+      display: grid;
+      grid-template-columns: minmax(0, 1fr) 42px minmax(0, 1fr) 42px minmax(0, 1fr);
+      gap: 10px;
+      align-items: center;
+      margin-top: 18px;
+      padding: 16px;
+      border: 1px solid var(--line);
+      border-radius: 20px;
+      background: rgba(255,255,255,0.94);
+    }
+    .flow-node {
+      display: grid;
+      gap: 8px;
+      min-height: 92px;
+      padding: 14px;
+      border-radius: 18px;
+      border: 1px solid var(--line);
+      background: rgba(248,250,252,0.95);
+      align-content: start;
+    }
+    .flow-node strong {
+      font-size: 15px;
+    }
+    .flow-node span {
+      color: var(--muted);
+      font-size: 13px;
+      line-height: 1.45;
+    }
+    .flow-node.active {
+      border-color: rgba(11, 107, 203, 0.22);
+      background: linear-gradient(180deg, rgba(239, 246, 255, 0.96), rgba(255,255,255,0.94));
+      box-shadow: 0 14px 28px rgba(11, 107, 203, 0.10);
+    }
+    .flow-arrow {
+      text-align: center;
+      color: var(--muted);
+      font-size: 24px;
+      font-weight: 800;
+      opacity: 0.75;
+    }
     .detail-sub {
       color: var(--muted);
       font-size: 13px;
@@ -675,8 +776,13 @@ HTML = """<!doctype html>
       .doc-toolbar,
       .controls-row,
       .config-grid,
-      .detail-grid {
+      .detail-grid,
+      .provider-split,
+      .provider-diagram {
         grid-template-columns: 1fr;
+      }
+      .flow-arrow {
+        transform: rotate(90deg);
       }
       .hero {
         padding: 24px 20px 20px;
@@ -1296,42 +1402,80 @@ HTML = """<!doctype html>
                     <span class="pill">OCR API</span>
                   </div>
                 </div>
-                <div class="config-grid">
-                  <div class="field">
-                    <label for="provider-active-ollama">Aktiver Ollama-Provider</label>
-                    <select id="provider-active-ollama">
-                      <option value="local">Lokal</option>
-                      <option value="remote">Remote</option>
-                    </select>
-                    <small>Steuert, welche Ollama-Quelle bevorzugt fuer kuenftige Ausbaustufen gedacht ist.</small>
+                <div class="provider-diagram">
+                  <div class="flow-node active">
+                    <strong>Paperless AI Web</strong>
+                    <span>Steuerung, Review, Task Manager und spaetere Modellrollen.</span>
                   </div>
-                  <div class="field">
-                    <label for="provider-local-ollama-url">Lokale Ollama-URL</label>
-                    <input id="provider-local-ollama-url" type="text" placeholder="http://127.0.0.1:11434">
-                    <small>Native VM oder spaeter lokaler Docker-Dienst.</small>
+                  <div class="flow-arrow">→</div>
+                  <div id="provider-diagram-ollama" class="flow-node">
+                    <strong>LLM-Pfad</strong>
+                    <span>Lokales oder externes `ollama` fuer Titel, Typ, Tags und Chat.</span>
                   </div>
-                  <div class="field">
-                    <label for="provider-remote-ollama-url">Externe Ollama-URL</label>
-                    <input id="provider-remote-ollama-url" type="text" placeholder="http://nas-host:11434">
-                    <small>Fuer spaetere NAS- oder andere Docker-Hosts im LAN.</small>
+                  <div class="flow-arrow">→</div>
+                  <div id="provider-diagram-ocr" class="flow-node">
+                    <strong>OCR-Zusatzpfad</strong>
+                    <span>Lokale oder externe OCR-API fuer schwierige Dokumente und Zusatzpruefung.</span>
                   </div>
-                  <div class="field">
-                    <label for="provider-active-ocr">Aktiver OCR-Zusatzpfad</label>
-                    <select id="provider-active-ocr">
-                      <option value="local">Lokal</option>
-                      <option value="remote">Remote</option>
-                    </select>
-                    <small>Vorbereitung fuer lokale oder externe OCR-APIs.</small>
+                </div>
+                <div class="provider-split">
+                  <div class="provider-panel local">
+                    <div class="provider-panel-head">
+                      <div>
+                        <h3>Lokale Provider</h3>
+                        <p>Alles, was direkt auf dieser VM oder spaeter lokal im Docker-Stack laeuft.</p>
+                      </div>
+                      <span id="provider-local-badge" class="provider-badge">Passiv</span>
+                    </div>
+                    <div class="config-grid">
+                      <div class="field">
+                        <label for="provider-active-ollama">Aktiver Ollama-Provider</label>
+                        <select id="provider-active-ollama">
+                          <option value="local">Lokal</option>
+                          <option value="remote">Remote</option>
+                        </select>
+                        <small>Steuert, ob die Oberflaeche lokal oder spaeter extern priorisiert arbeitet.</small>
+                      </div>
+                      <div class="field">
+                        <label for="provider-local-ollama-url">Lokale Ollama-URL</label>
+                        <input id="provider-local-ollama-url" type="text" placeholder="http://127.0.0.1:11434">
+                        <small>Native VM oder spaeter lokaler Docker-Dienst.</small>
+                      </div>
+                      <div class="field">
+                        <label for="provider-active-ocr">Aktiver OCR-Zusatzpfad</label>
+                        <select id="provider-active-ocr">
+                          <option value="local">Lokal</option>
+                          <option value="remote">Remote</option>
+                        </select>
+                        <small>Bereitet die Trennung lokal vs. extern schon jetzt vor.</small>
+                      </div>
+                      <div class="field">
+                        <label for="provider-local-ocr-url">Lokale OCR-API URL</label>
+                        <input id="provider-local-ocr-url" type="text" placeholder="http://127.0.0.1:8091">
+                        <small>Aktueller lokaler `PaddleOCR`- oder spaeter anderer OCR-Dienst.</small>
+                      </div>
+                    </div>
                   </div>
-                  <div class="field">
-                    <label for="provider-local-ocr-url">Lokale OCR-API URL</label>
-                    <input id="provider-local-ocr-url" type="text" placeholder="http://127.0.0.1:8091">
-                    <small>Aktueller lokaler `PaddleOCR`- oder spaeter anderer OCR-Dienst.</small>
-                  </div>
-                  <div class="field">
-                    <label for="provider-remote-ocr-url">Externe OCR-API URL</label>
-                    <input id="provider-remote-ocr-url" type="text" placeholder="http://nas-host:8091">
-                    <small>Vorbereitung fuer OCR-Docker ausserhalb dieser VM.</small>
+                  <div class="provider-panel remote">
+                    <div class="provider-panel-head">
+                      <div>
+                        <h3>Externe Provider</h3>
+                        <p>Vorbereitung fuer NAS, Remote-Docker oder andere Hosts im LAN.</p>
+                      </div>
+                      <span id="provider-remote-badge" class="provider-badge">Passiv</span>
+                    </div>
+                    <div class="config-grid">
+                      <div class="field">
+                        <label for="provider-remote-ollama-url">Externe Ollama-URL</label>
+                        <input id="provider-remote-ollama-url" type="text" placeholder="http://nas-host:11434">
+                        <small>Fuer spaetere NAS- oder andere Docker-Hosts im LAN.</small>
+                      </div>
+                      <div class="field">
+                        <label for="provider-remote-ocr-url">Externe OCR-API URL</label>
+                        <input id="provider-remote-ocr-url" type="text" placeholder="http://nas-host:8091">
+                        <small>Vorbereitung fuer OCR-Docker ausserhalb dieser VM.</small>
+                      </div>
+                    </div>
                   </div>
                 </div>
                 <div class="actions">
@@ -1469,6 +1613,10 @@ HTML = """<!doctype html>
     const providerActiveOcrEl = document.getElementById('provider-active-ocr');
     const providerLocalOcrUrlEl = document.getElementById('provider-local-ocr-url');
     const providerRemoteOcrUrlEl = document.getElementById('provider-remote-ocr-url');
+    const providerLocalBadgeEl = document.getElementById('provider-local-badge');
+    const providerRemoteBadgeEl = document.getElementById('provider-remote-badge');
+    const providerDiagramOllamaEl = document.getElementById('provider-diagram-ollama');
+    const providerDiagramOcrEl = document.getElementById('provider-diagram-ocr');
     const saveProviderConfigBtn = document.getElementById('save-provider-config');
     const reloadProviderConfigBtn = document.getElementById('reload-provider-config');
     const testProviderConfigBtn = document.getElementById('test-provider-config');
@@ -2140,6 +2288,20 @@ HTML = """<!doctype html>
         providerActiveOcrEl.value = data.active_ocr_provider || 'local';
         providerLocalOcrUrlEl.value = data.local_ocr_url || '';
         providerRemoteOcrUrlEl.value = data.remote_ocr_url || '';
+        const localActive = providerActiveOllamaEl.value === 'local' || providerActiveOcrEl.value === 'local';
+        const remoteActive = providerActiveOllamaEl.value === 'remote' || providerActiveOcrEl.value === 'remote';
+        providerLocalBadgeEl.textContent = localActive ? 'Aktiv' : 'Passiv';
+        providerRemoteBadgeEl.textContent = remoteActive ? 'Aktiv' : 'Passiv';
+        providerLocalBadgeEl.classList.toggle('active', localActive);
+        providerRemoteBadgeEl.classList.toggle('active', remoteActive);
+        providerDiagramOllamaEl.classList.toggle('active', providerActiveOllamaEl.value === 'local' || providerActiveOllamaEl.value === 'remote');
+        providerDiagramOllamaEl.querySelector('span').textContent = providerActiveOllamaEl.value === 'local'
+          ? 'Aktiv ueber lokales Ollama auf dieser VM.'
+          : 'Aktiv ueber externes Ollama, z. B. spaeter auf dem NAS.';
+        providerDiagramOcrEl.classList.toggle('active', providerActiveOcrEl.value === 'local' || providerActiveOcrEl.value === 'remote');
+        providerDiagramOcrEl.querySelector('span').textContent = providerActiveOcrEl.value === 'local'
+          ? 'Aktiv ueber lokale OCR-API auf dieser VM.'
+          : 'Aktiv ueber externe OCR-API ausserhalb dieser VM.';
         providerConfigStatusEl.textContent = 'Providerbereich geladen.';
       } catch (err) {
         providerConfigStatusEl.textContent = `Fehler: ${err.message}`;
