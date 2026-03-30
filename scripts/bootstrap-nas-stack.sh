@@ -40,5 +40,6 @@ copy_if_missing config/version.example.json config/version.json
 printf '\nNAS stack scaffold prepared in %s\n' "$ROOT_DIR"
 printf 'Next steps:\n'
 printf '  1. Edit .env and config/paperless-ai.env\n'
-printf '  2. Start core services with: sudo docker compose up -d broker db gotenberg tika webserver consumer task-queue scheduler ollama\n'
+printf '  2. Start core services with: sudo docker compose up -d broker db gotenberg tika webserver ollama\n'
+printf '  3. After webserver is healthy: sudo docker compose up -d consumer task-queue scheduler\n'
 printf '  3. Add paperless-ai-web after Paperless is healthy\n'

@@ -70,10 +70,10 @@ Grund:
 
 ## Erster Start
 
-Zunaechst nur Paperless-Core und Ollama:
+Zunaechst nur Basisdienste plus `webserver`, damit die ersten Migrationen ohne Lock-Konflikte sauber durchlaufen:
 
 ```bash
-sudo docker compose up -d broker db gotenberg tika webserver consumer task-queue scheduler ollama
+sudo docker compose up -d broker db gotenberg tika webserver ollama
 ```
 
 Danach pruefen:
@@ -81,9 +81,22 @@ Danach pruefen:
 ```bash
 sudo docker compose ps
 sudo docker compose logs --tail=100 webserver
-sudo docker compose logs --tail=100 consumer
 sudo docker compose logs --tail=100 ollama
 ```
+
+Wenn `webserver` gesund ist, erst die restlichen Paperless-Dienste starten:
+
+```bash
+sudo docker compose up -d consumer task-queue scheduler
+```
+
+Hinweise:
+- `consumer`, `task-queue` und `scheduler` haben in diesem Stack bewusst keine HTTP-Healthchecks.
+- Der `paperless-ngx`-Container bringt standardmaessig einen Port-`8000`-Probeweg mit, der fuer diese drei Nicht-Webdienste nur Fehlalarme erzeugen wuerde.
+- Der korrekte Laufzustand ist stattdessen:
+  - `consumer`: pollt `/usr/src/paperless/consume`
+  - `task-queue`: Celery-Worker ist mit Redis verbunden
+  - `scheduler`: Celery Beat laeuft
 
 ## Zweiter Schritt
 

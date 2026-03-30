@@ -99,6 +99,8 @@ services:
     image: ghcr.io/paperless-ngx/paperless-ngx:2.18.4
     container_name: paperless-consumer
     restart: unless-stopped
+    entrypoint: []
+    working_dir: /usr/src/paperless/src
     depends_on:
       db:
         condition: service_healthy
@@ -114,7 +116,9 @@ services:
       PAPERLESS_TIKA_ENABLED: 1
       PAPERLESS_TIKA_GOTENBERG_ENDPOINT: http://gotenberg:3000
       PAPERLESS_TIKA_ENDPOINT: http://tika:9998
-    command: ["document_consumer"]
+    command: ["python", "manage.py", "document_consumer"]
+    healthcheck:
+      disable: true
     volumes:
       - ./data/paperless/consume:/usr/src/paperless/consume
       - ./data/paperless/media:/usr/src/paperless/media
@@ -133,6 +137,8 @@ services:
     image: ghcr.io/paperless-ngx/paperless-ngx:2.18.4
     container_name: paperless-task-queue
     restart: unless-stopped
+    entrypoint: []
+    working_dir: /usr/src/paperless/src
     depends_on:
       db:
         condition: service_healthy
@@ -146,7 +152,15 @@ services:
       PAPERLESS_TIKA_ENABLED: 1
       PAPERLESS_TIKA_GOTENBERG_ENDPOINT: http://gotenberg:3000
       PAPERLESS_TIKA_ENDPOINT: http://tika:9998
-    command: ["task_queue"]
+    command:
+      - celery
+      - --app
+      - paperless
+      - worker
+      - --loglevel
+      - INFO
+    healthcheck:
+      disable: true
     volumes:
       - ./data/paperless/consume:/usr/src/paperless/consume
       - ./data/paperless/media:/usr/src/paperless/media
@@ -165,6 +179,8 @@ services:
     image: ghcr.io/paperless-ngx/paperless-ngx:2.18.4
     container_name: paperless-scheduler
     restart: unless-stopped
+    entrypoint: []
+    working_dir: /usr/src/paperless/src
     depends_on:
       db:
         condition: service_healthy
@@ -175,9 +191,23 @@ services:
     environment:
       PAPERLESS_REDIS: redis://broker:6379
       PAPERLESS_DBHOST: db
-    command: ["scheduler"]
+    command:
+      - celery
+      - --app
+      - paperless
+      - beat
+      - --loglevel
+      - INFO
+    healthcheck:
+      disable: true
     volumes:
+      - ./config/paperless-ai.env:/config/paperless-ai.env
+      - ./config/tessdata-best:/config/tessdata-best
       - ./data/paperless/data:/usr/src/paperless/data
+      - ./hooks:/usr/src/paperless-ai/hooks:ro
+      - ./prompts:/usr/src/paperless-ai/prompts:ro
+      - ./scripts:/usr/src/paperless-ai/scripts:ro
+      - ./config:/usr/src/paperless-ai/config:ro
     networks:
       - paperless-ai
 
