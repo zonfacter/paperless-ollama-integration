@@ -241,6 +241,7 @@ services:
       OLLAMA_HOST: ${OLLAMA_HOST}
       OLLAMA_INTEL_GPU: ${OLLAMA_INTEL_GPU:-1}
       OLLAMA_VULKAN: ${OLLAMA_VULKAN:-1}
+      OLLAMA_FLASH_ATTENTION: ${OLLAMA_FLASH_ATTENTION:-0}
     healthcheck:
       test: ["CMD-SHELL", "ollama list >/dev/null 2>&1"]
       interval: 30s
