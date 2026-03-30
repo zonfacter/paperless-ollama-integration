@@ -80,7 +80,7 @@ services:
       timeout: 10s
       retries: 10
     ports:
-      - "8000:8000"
+      - "${PAPERLESS_BIND_HOST:-0.0.0.0}:${PAPERLESS_PUBLIC_PORT:-8000}:8000"
     volumes:
       - ./data/paperless/consume:/usr/src/paperless/consume
       - ./data/paperless/media:/usr/src/paperless/media
@@ -195,7 +195,7 @@ services:
       timeout: 10s
       retries: 10
     ports:
-      - "11434:11434"
+      - "${OLLAMA_BIND_HOST:-127.0.0.1}:${OLLAMA_PUBLIC_PORT:-11434}:11434"
     volumes:
       - ./data/ollama:/root/.ollama
     networks:
@@ -225,7 +225,7 @@ services:
       PAPERLESS_MODEL_CONFIG_PATH: /data/model_config.json
       PADDLEOCR_API_INSTALL_SCRIPT: /usr/src/paperless-ai/scripts/install-paddleocr-api.sh
     ports:
-      - "3000:3000"
+      - "${PAPERLESS_AI_WEB_BIND_HOST:-0.0.0.0}:${PAPERLESS_AI_WEB_PUBLIC_PORT:-3000}:3000"
     volumes:
       - ./config/paperless-ai.env:/config/paperless-ai.env
       - ./data/paperless-ai-web:/data
@@ -247,7 +247,7 @@ services:
     env_file:
       - ./.env
     ports:
-      - "8091:8091"
+      - "${PADDLEOCR_BIND_HOST:-127.0.0.1}:${PADDLEOCR_PUBLIC_PORT:-8091}:8091"
     volumes:
       - ./data/paddleocr-cache:/root/.paddlex
     networks:

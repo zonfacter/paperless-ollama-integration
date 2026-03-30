@@ -53,7 +53,20 @@ mkdir -p \
    - Secret Key
    - Zeitzone
    - Paperless-URL
+   - Host-Ports
    - API-Token spaeter nach erstem Admin-Login
+
+Empfohlener Start auf diesem NAS:
+
+- `PAPERLESS_PUBLIC_PORT=18000`
+- `PAPERLESS_AI_WEB_PUBLIC_PORT=3000`
+- `OLLAMA_BIND_HOST=127.0.0.1`
+- `PADDLEOCR_BIND_HOST=127.0.0.1`
+
+Grund:
+
+- `8000` ist auf diesem NAS bereits durch `portainer` belegt
+- `ollama` und `paddleocr-api` sollen nicht unnoetig direkt ins LAN exponiert werden
 
 ## Erster Start
 

@@ -1,20 +1,12 @@
 services:
-  webserver:
-    ports:
-      - "8000:8000"
-
   ollama:
-    ports:
-      - "11434:11434"
+    # Optional spaeter fuer echte iGPU-/GPU-Tests auf dem NAS:
     # devices:
     #   - /dev/dri:/dev/dri
+    environment:
+      OLLAMA_NUM_PARALLEL: "1"
 
   paperless-ai-web:
-    ports:
-      - "3000:3000"
-
-  paddleocr-api:
-    profiles: ["ocr-extra"]
-    ports:
-      - "8091:8091"
+    environment:
+      PAPERLESS_AI_WEB_THEME: "default"
 
