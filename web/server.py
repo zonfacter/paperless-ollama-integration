@@ -971,6 +971,8 @@ HTML = """<!doctype html>
                     </div>
                     <div class="actions">
                       <button id="tasks-refresh-selected" class="secondary">Ausgewaehlten Job aktualisieren</button>
+                      <button id="tasks-cancel-selected" class="secondary">Ausgewaehlten Job abbrechen</button>
+                      <button id="tasks-delete-selected" class="secondary">Aus Task Manager entfernen</button>
                     </div>
                     <div id="tasks-detail-log" class="logbox">Bereit.</div>
                   </div>
@@ -1311,6 +1313,8 @@ HTML = """<!doctype html>
     const tasksRefreshBtn = document.getElementById('tasks-refresh');
     const tasksShowLatestBtn = document.getElementById('tasks-show-latest');
     const tasksRefreshSelectedBtn = document.getElementById('tasks-refresh-selected');
+    const tasksCancelSelectedBtn = document.getElementById('tasks-cancel-selected');
+    const tasksDeleteSelectedBtn = document.getElementById('tasks-delete-selected');
     const tasksStatusEl = document.getElementById('tasks-status');
     const tasksListEl = document.getElementById('tasks-list');
     const tasksDetailMetaEl = document.getElementById('tasks-detail-meta');
@@ -2127,9 +2131,13 @@ HTML = """<!doctype html>
         tasksDetailMetaEl.innerHTML = '<div class="doc-empty">Noch kein Job ausgewaehlt.</div>';
         tasksDetailLogEl.textContent = 'Bereit.';
         tasksDetailLogEl.scrollTop = tasksDetailLogEl.scrollHeight;
+        tasksCancelSelectedBtn.disabled = true;
+        tasksDeleteSelectedBtn.disabled = true;
         return;
       }
       activeTaskJobId = job.id || null;
+      tasksCancelSelectedBtn.disabled = !['running', 'starting'].includes(String(job.status || ''));
+      tasksDeleteSelectedBtn.disabled = false;
       tasksDetailMetaEl.innerHTML = `
         <div class="meta-row"><div class="meta-label">Job-ID</div><div>${formatValue(job.id)}</div></div>
         <div class="meta-row"><div class="meta-label">Status</div><div>${formatValue(job.status)}</div></div>
@@ -2152,6 +2160,72 @@ HTML = """<!doctype html>
       tasksDetailLogEl.textContent = lines.join('\\n');
       tasksDetailLogEl.scrollTop = tasksDetailLogEl.scrollHeight;
       renderTaskJobList(window.__taskJobsCache || []);
+    }
+
+    async function cancelSelectedTaskJob() {
+      const jobId = activeTaskJobId || activeBackfillJobId;
+      if (!jobId) {
+        tasksStatusEl.textContent = 'Kein Job zum Abbrechen ausgewaehlt.';
+        tasksStatusEl.className = 'statusline warn';
+        return;
+      }
+      if (!window.confirm(`Hintergrundjob ${jobId} wirklich abbrechen?`)) {
+        return;
+      }
+      tasksCancelSelectedBtn.disabled = true;
+      tasksStatusEl.textContent = `Job ${jobId} wird abgebrochen...`;
+      tasksStatusEl.className = 'statusline';
+      try {
+        const res = await fetch(`/api/paperless/backfill-jobs/${jobId}/cancel`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({})
+        });
+        const data = await res.json();
+        if (!res.ok) throw new Error(data.error || 'Fehler');
+        tasksStatusEl.textContent = data.message || `Job ${jobId} wurde abgebrochen.`;
+        await loadTaskJobs();
+        await loadBackfillJobStatus(jobId);
+      } catch (err) {
+        tasksStatusEl.textContent = `Fehler beim Abbrechen: ${err.message}`;
+        tasksStatusEl.className = 'statusline warn';
+      } finally {
+        tasksCancelSelectedBtn.disabled = false;
+      }
+    }
+
+    async function deleteSelectedTaskJob() {
+      const jobId = activeTaskJobId || activeBackfillJobId;
+      if (!jobId) {
+        tasksStatusEl.textContent = 'Kein Job zum Entfernen ausgewaehlt.';
+        tasksStatusEl.className = 'statusline warn';
+        return;
+      }
+      if (!window.confirm(`Job ${jobId} aus dem Task Manager entfernen? Die Logdatei wird dabei ebenfalls geloescht, wenn moeglich.`)) {
+        return;
+      }
+      tasksDeleteSelectedBtn.disabled = true;
+      tasksStatusEl.textContent = `Job ${jobId} wird entfernt...`;
+      tasksStatusEl.className = 'statusline';
+      try {
+        const res = await fetch(`/api/paperless/backfill-jobs/${jobId}`, { method: 'DELETE' });
+        const data = await res.json();
+        if (!res.ok) throw new Error(data.error || 'Fehler');
+        if (activeTaskJobId === jobId) {
+          activeTaskJobId = null;
+        }
+        if (activeBackfillJobId === jobId) {
+          setBackfillJobState(null);
+          renderBackfillJob(null);
+        }
+        tasksStatusEl.textContent = data.message || `Job ${jobId} wurde entfernt.`;
+        await loadTaskJobs();
+      } catch (err) {
+        tasksStatusEl.textContent = `Fehler beim Entfernen: ${err.message}`;
+        tasksStatusEl.className = 'statusline warn';
+      } finally {
+        tasksDeleteSelectedBtn.disabled = false;
+      }
     }
 
     async function loadTaskJobs() {
@@ -2384,6 +2458,8 @@ HTML = """<!doctype html>
     });
     tasksShowLatestBtn.addEventListener('click', loadLatestBackfillJobStatus);
     tasksRefreshSelectedBtn.addEventListener('click', () => loadBackfillJobStatus(activeTaskJobId || activeBackfillJobId));
+    tasksCancelSelectedBtn.addEventListener('click', cancelSelectedTaskJob);
+    tasksDeleteSelectedBtn.addEventListener('click', deleteSelectedTaskJob);
 
     loadModels().catch(() => {
       statusEl.textContent = 'Modelle konnten nicht geladen werden.';
@@ -4104,6 +4180,64 @@ def list_backfill_jobs() -> list[dict]:
     return jobs
 
 
+def cancel_backfill_job(job_id: str) -> tuple[int, dict]:
+    job = read_backfill_job(job_id)
+    if job is None:
+        return 404, {"error": "Backfill job not found"}
+    payload = dict(job)
+    status = str(payload.get("status") or "")
+    pid = payload.get("pid")
+    if status not in {"running", "starting"}:
+        return 400, {"error": "Job ist nicht mehr aktiv"}
+    if not _process_alive(pid):
+        payload["status"] = "error"
+        payload["error"] = "Hintergrundprozess laeuft nicht mehr"
+        payload["error_reason"] = "Hintergrundprozess laeuft nicht mehr"
+        payload["finished_at"] = time.strftime("%Y-%m-%d %H:%M:%S")
+        store_backfill_job(job_id, payload)
+        return 200, {"job": payload, "message": f"Job {job_id} war bereits beendet."}
+    try:
+        os.kill(int(pid), 15)
+    except OSError as exc:
+        return 500, {"error": f"Job konnte nicht abgebrochen werden: {exc}"}
+    payload["status"] = "error"
+    payload["error"] = "Manuell abgebrochen"
+    payload["error_reason"] = "Manuell abgebrochen"
+    payload["finished_at"] = time.strftime("%Y-%m-%d %H:%M:%S")
+    log_path = payload.get("log_path")
+    if log_path:
+        with Path(str(log_path)).open("a", encoding="utf-8") as handle:
+            handle.write(f"[{payload['finished_at']}] Job manuell abgebrochen\n")
+    store_backfill_job(job_id, payload)
+    return 200, {"job": payload, "message": f"Job {job_id} wurde abgebrochen."}
+
+
+def delete_backfill_job(job_id: str) -> tuple[int, dict]:
+    global BACKFILL_LATEST_JOB_ID
+    with BACKFILL_JOBS_LOCK:
+        if not BACKFILL_JOBS:
+            _load_backfill_state()
+        job = BACKFILL_JOBS.get(job_id)
+        if job is None:
+            return 404, {"error": "Backfill job not found"}
+        status = str(job.get("status") or "")
+        if status in {"running", "starting"} and _process_alive(job.get("pid")):
+            return 400, {"error": "Aktive Jobs bitte erst abbrechen"}
+        log_path = str(job.get("log_path") or "")
+        deleted_log = False
+        if log_path:
+            try:
+                Path(log_path).unlink(missing_ok=True)
+                deleted_log = True
+            except Exception:
+                deleted_log = False
+        BACKFILL_JOBS.pop(job_id, None)
+        if BACKFILL_LATEST_JOB_ID == job_id:
+            BACKFILL_LATEST_JOB_ID = next(iter(BACKFILL_JOBS.keys()), None)
+        _save_backfill_state()
+    return 200, {"deleted": True, "deleted_log": deleted_log, "message": f"Job {job_id} wurde entfernt."}
+
+
 def _read_cpu_times() -> tuple[int, int]:
     line = Path("/proc/stat").read_text(encoding="utf-8", errors="replace").splitlines()[0]
     parts = [int(value) for value in line.split()[1:]]
@@ -4407,8 +4541,13 @@ def launch_detached_backfill_process(job_id: str, cmd: list[str], child_env: dic
     quoted_cmd = " ".join(shlex.quote(part) for part in cmd)
     quoted_log = shlex.quote(log_path)
     wrapper = (
-        f"{quoted_cmd} >> {quoted_log} 2>&1; "
-        "rc=$?; "
+        "set -o pipefail; "
+        "{ "
+        f"{quoted_cmd} 2>&1 | while IFS= read -r line; do "
+        f"printf '[%s] %s\\n' \"$(date '+%Y-%m-%d %H:%M:%S')\" \"$line\"; "
+        f"done >> {quoted_log}; "
+        "}; "
+        "rc=${PIPESTATUS[0]}; "
         f"printf '\\n[%s] Job finished with returncode %s\\n' \"$(date '+%Y-%m-%d %H:%M:%S')\" \"$rc\" >> {quoted_log}; "
         "exit 0"
     )
@@ -4571,7 +4710,26 @@ class Handler(BaseHTTPRequestHandler):
             return
         self._send(404, b"Not found", "text/plain; charset=utf-8")
 
+    def do_DELETE(self) -> None:
+        if self.path.startswith("/api/paperless/backfill-jobs/"):
+            job_id = self.path.rsplit("/", 1)[-1]
+            try:
+                status, payload = delete_backfill_job(job_id)
+            except Exception as exc:
+                status, payload = 500, {"error": str(exc)}
+            self._send(status, json.dumps(payload).encode("utf-8"), "application/json")
+            return
+        self._send(404, b"Not found", "text/plain; charset=utf-8")
+
     def do_POST(self) -> None:
+        if self.path.startswith("/api/paperless/backfill-jobs/") and self.path.endswith("/cancel"):
+            job_id = self.path.rsplit("/", 2)[-2]
+            try:
+                status, response = cancel_backfill_job(job_id)
+            except Exception as exc:
+                status, response = 500, {"error": str(exc)}
+            self._send(status, json.dumps(response).encode("utf-8"), "application/json")
+            return
         if self.path.startswith("/api/paperless/document/") and self.path.endswith("/preview"):
             length = int(self.headers.get("Content-Length", "0"))
             payload = {}
