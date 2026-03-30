@@ -1,0 +1,12 @@
+{
+  "active_ollama_provider": "local",
+  "active_ocr_provider": "local",
+  "local_ollama_url": "http://ollama:11434",
+  "remote_ollama_url": "",
+  "local_ocr_url": "http://paddleocr-api:8091",
+  "remote_ocr_url": "",
+  "openai_compatible_url": "",
+  "openai_compatible_model": "",
+  "notes": "Local defaults for a NAS Docker stack. Keep remote values empty until actually needed."
+}
+

@@ -1,0 +1,10 @@
+{
+  "channel": "stable",
+  "local_version": "0.1.x",
+  "release_source": "github",
+  "release_repo": "zonfacter/paperless-ollama-integration",
+  "image_registry": "dockerhub",
+  "image_namespace": "zonfacter",
+  "image_name": "paperless-ai-web"
+}
+

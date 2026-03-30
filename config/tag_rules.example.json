@@ -1,0 +1,41 @@
+{
+  "school": {
+    "Fehlzeiten": [
+      "fehlzeit",
+      "fehlzeiten des schülers",
+      "fehlzeiten des schuelers"
+    ],
+    "Schulpflicht": [
+      "schulpflicht",
+      "schulpflichtverletzung"
+    ],
+    "Attest": [
+      "attest",
+      "ärzt",
+      "aerzt",
+      "vorlage ärztlicher atteste",
+      "vorlage aerztlicher atteste"
+    ]
+  },
+  "court": {
+    "Beschluss": [
+      "beschluss"
+    ],
+    "Pflegschaft": [
+      "pflegschaft"
+    ]
+  },
+  "medical": {
+    "Attest": [
+      "attest",
+      "ärztliche bescheinigung",
+      "aerztliche bescheinigung"
+    ],
+    "Krankschreibung": [
+      "arbeitsunfähig",
+      "arbeitsunfaehig",
+      "krankschreibung"
+    ]
+  }
+}
+

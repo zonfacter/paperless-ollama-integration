@@ -1,0 +1,14 @@
+{
+  "preview_ocr_model": "qwen3.5:4b",
+  "ocr_source": "paperless",
+  "paddleocr_api_url": "http://paddleocr-api:8091",
+  "paddleocr_timeout_seconds": "90",
+  "paddleocr_max_pages": "1",
+  "vision_model": "qwen3.5:0.8b",
+  "vision_content_chars": "800",
+  "vision_timeout_seconds": "120",
+  "vision_max_pages": "1",
+  "vision_tag_name": "KI Vision",
+  "vision_tag_color": "#d97706"
+}
+

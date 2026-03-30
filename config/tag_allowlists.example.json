@@ -1,0 +1,51 @@
+{
+  "lawyer": [
+    "Familienrecht",
+    "Unterhalt",
+    "Umgangsrecht",
+    "Sorgerecht",
+    "Schriftsatz",
+    "Stellungnahme",
+    "Vollmacht",
+    "Gewaltschutz"
+  ],
+  "school": [
+    "Fehlzeiten",
+    "Schulpflicht",
+    "Attest",
+    "Zeugnis",
+    "Förderung",
+    "Schulpsychologie",
+    "Versetzung",
+    "Ordnungsmaßnahme"
+  ],
+  "court": [
+    "Beschluss",
+    "Pflegschaft",
+    "Familienrecht",
+    "Unterhalt",
+    "Umgangsrecht",
+    "Sorgerecht",
+    "Beschwerde",
+    "Gewaltschutz"
+  ],
+  "medical": [
+    "Attest",
+    "Befund",
+    "Diagnose",
+    "Labor",
+    "Medikation",
+    "Behandlung",
+    "Krankschreibung",
+    "Kinderarzt"
+  ],
+  "tax": [
+    "Einkommensteuer",
+    "Steuererklärung",
+    "Steuerbescheid",
+    "Umsatzsteuer",
+    "ELSTER",
+    "Sonderausgaben"
+  ]
+}
+

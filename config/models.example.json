@@ -1,0 +1,41 @@
+{
+  "library": [
+    {
+      "id": "qwen3.5-9b",
+      "provider": "ollama_local",
+      "model": "qwen3.5:9b",
+      "role_hint": [
+        "import",
+        "tag_review"
+      ],
+      "link": "https://ollama.com/library/qwen3.5:9b"
+    },
+    {
+      "id": "qwen3.5-4b",
+      "provider": "ollama_local",
+      "model": "qwen3.5:4b",
+      "role_hint": [
+        "preview",
+        "fallback"
+      ],
+      "link": "https://ollama.com/library/qwen3.5:4b"
+    },
+    {
+      "id": "qwen3.5-0.8b",
+      "provider": "ollama_local",
+      "model": "qwen3.5:0.8b",
+      "role_hint": [
+        "vision_preview"
+      ],
+      "link": "https://ollama.com/library/qwen3.5:0.8b"
+    }
+  ],
+  "roles": {
+    "import_model": "qwen3.5:9b",
+    "fallback_model": "qwen3.5:4b",
+    "preview_model": "qwen3.5:4b",
+    "tag_review_model": "qwen3.5:9b",
+    "vision_model": "qwen3.5:0.8b"
+  }
+}
+

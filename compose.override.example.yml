@@ -1,0 +1,20 @@
+services:
+  webserver:
+    ports:
+      - "8000:8000"
+
+  ollama:
+    ports:
+      - "11434:11434"
+    # devices:
+    #   - /dev/dri:/dev/dri
+
+  paperless-ai-web:
+    ports:
+      - "3000:3000"
+
+  paddleocr-api:
+    profiles: ["ocr-extra"]
+    ports:
+      - "8091:8091"
+
