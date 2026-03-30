@@ -3153,6 +3153,19 @@ def ollama_num_thread() -> int:
     return positive_int(env_map.get("PAPERLESS_AI_OLLAMA_NUM_THREAD") or os.getenv("OLLAMA_NUM_THREAD") or "4", 4)
 
 
+def ollama_preview_num_ctx() -> int:
+    try:
+        env_map = load_paperless_env()
+    except Exception:
+        env_map = {}
+    return positive_int(
+        env_map.get("PAPERLESS_PREVIEW_OLLAMA_NUM_CTX")
+        or os.getenv("PAPERLESS_PREVIEW_OLLAMA_NUM_CTX")
+        or "32768",
+        32768,
+    )
+
+
 def default_preview_config() -> dict[str, str]:
     default_local_ocr_url = os.getenv("PAPERLESS_PROVIDER_LOCAL_OCR_URL", "http://127.0.0.1:8091")
     return {
@@ -4424,11 +4437,12 @@ def call_ollama_preview(module, prompt: str, image_payloads: list[str] | None, m
     if image_payloads:
         user_message["images"] = image_payloads
     num_thread = ollama_num_thread()
+    num_ctx = ollama_preview_num_ctx()
     payload: dict[str, object] = {
         "model": model,
         "stream": False,
         "format": "json",
-        "options": {"num_thread": num_thread},
+        "options": {"num_thread": num_thread, "num_ctx": num_ctx},
         "messages": [
             {"role": "system", "content": "Du gibst ausschliesslich valides JSON aus."},
             user_message,
