@@ -27,6 +27,8 @@ Die Datei ist bewusst so geschrieben, dass sie auf das NAS kopiert werden kann u
   - Review-/Admin-UI
   - Hintergrundjobs
 - Erst reproduzierbare Basis, dann Optimierung.
+- Scanner-Ingest und Archiv-Pfade von Anfang an sauber planen.
+- Keine Annahme, dass Host-Pfade aus der VM 1:1 auf dem NAS existieren.
 
 ## Zielarchitektur
 
@@ -129,6 +131,12 @@ Zusatz fuer die Webkonsole:
 - lokale UI-Config
 - Tag-Allowlist-/Regel-JSON
 
+Wichtig:
+
+- `paperless_consume` ist der Eingangsordner fuer neue Scans.
+- `paperless_media` ist das eigentliche Dokumentenarchiv.
+- beide muessen bewusst geplant werden, damit Scanner, Backup und Container sauber zusammenpassen.
+
 ## Ziel fuer Konfigurationsdateien
 
 Auf dem NAS sollte es einen klaren Konfigurationsbereich geben, z. B.:
@@ -149,6 +157,122 @@ Auf dem NAS sollte es einen klaren Konfigurationsbereich geben, z. B.:
 ```
 
 Wenn das NAS andere Standards hat, ist die Struktur sinngemaess gleich zu halten.
+
+## Scanner- und NFS-Konzept
+
+Das muss fuer das NAS ausdruecklich mitgedacht werden.
+
+### Ziel
+
+Ein Scanner soll direkt in einen durch `paperless` konsumierten Ordner schreiben koennen, ohne Shell-Nacharbeit.
+
+### Empfohlene Struktur
+
+```text
+/srv/paperless-ai/data/
+  consume/
+  media/
+  export/
+  scratch/
+```
+
+### Empfehlung fuer den Scanner
+
+Am besten schreibt der Scanner auf einen NAS-lokalen Freigabeordner, der dann als `paperless_consume` in den Container gemountet wird.
+
+Bevorzugt:
+
+- Scanner schreibt auf einen NAS-Ordner
+- Docker bind-mountet genau diesen Ordner in den `consume`-Pfad
+
+Weniger gut:
+
+- ein Container greift auf einen extern gemounteten Netzwerkpfad zu, dessen Verhalten bei Dateievents unklar ist
+
+### Wenn NFS trotzdem genutzt wird
+
+Dann muss beachtet werden:
+
+- Dateirechte muessen zum Container-User passen
+- der Scanner sollte Dateien moeglichst atomar fertigschreiben
+- ideal:
+  - zuerst temporaer schreiben
+  - danach rename auf finalen Dateinamen
+- keine halbfertigen PDFs im Consume-Ordner liegen lassen
+
+### Wichtig fuer Paperless
+
+Vor dem NAS-Betrieb pruefen:
+
+- welcher Container-User schreibt/liest
+- welche UID/GID genutzt wird
+- ob der Scanner-/NFS-Pfad fuer diesen User lesbar ist
+- ob der Ingest auf dem NAS mit grossen PDFs stabil bleibt
+
+## Lessons Learned aus der VM
+
+Diese Punkte muessen im NAS-Docker-Konzept ausdruecklich beruecksichtigt werden.
+
+### 1. Hintergrundjobs duerfen nicht am Webdienst haengen
+
+In der VM sind erste Backfills faktisch abgebrochen, weil sie am Lebenszyklus des Webdienstes hingen.
+
+Konsequenz fuer NAS:
+
+- Hintergrundjobs muessen entkoppelt sein
+- Jobstatus muss persistent gespeichert werden
+- Webservice-Neustarts duerfen Backfills nicht verlieren
+
+### 2. Task Manager ist Pflicht
+
+Benutzer arbeiten nicht auf Shell oder Konsole.
+
+Konsequenz fuer NAS:
+
+- Jobliste
+- Loganzeige
+- Abbrechen
+- Entfernen
+- Fehlergrund
+- letzte Aktivitaet
+
+muessen in der Weboberflaeche bleiben.
+
+### 3. OCR ist kein Einzelschalter
+
+Wir hatten reale Unterschiede zwischen:
+
+- `skip`
+- `redo`
+- `force`
+- Tesseract Standarddaten
+- `tessdata_best`
+
+Konsequenz fuer NAS:
+
+- OCR-Einstellungen muessen bewusst dokumentiert werden
+- fuer problematische PDFs darf OCR konfigurierbar bleiben
+- `PaddleOCR` bleibt Zusatzpfad, nicht unbedacht globaler Ersatz
+
+### 4. Logs muessen menschenlesbar sein
+
+Ein Log ohne Zeitstempel oder ohne letzte Aktivitaet hilft in der Praxis zu wenig.
+
+Konsequenz fuer NAS:
+
+- Zeitstempel pro Logzeile
+- Fehlergrund
+- letzte Dokument-ID
+- Jobstatus persistent
+
+### 5. GPU-Erkennung darf nicht schoenreden
+
+Ein sichtbares Grafikgeraet ist noch keine nutzbare KI-GPU.
+
+Konsequenz fuer NAS:
+
+- nur `renderD*` oder ein klar belegbarer GPU-Pfad zaehlt als nutzbar
+- ansonsten weiter CPU-only annehmen
 
 ## Empfohlene Compose-Gliederung
 
@@ -186,7 +310,9 @@ Aufgaben:
 2. Netzwerkmodell festlegen.
 3. persistente Verzeichnisse/Volumes anlegen.
 4. Basis-`compose.yml` fuer `paperless-ngx` erstellen.
-5. `paperless` ohne KI zuerst stabil starten.
+5. Consume-/Media-/Export-/Backup-Pfade festlegen.
+6. Scanner-/NFS-Pfad und Rechte pruefen.
+7. `paperless` ohne KI zuerst stabil starten.
 
 Abnahmekriterium:
 
@@ -207,6 +333,7 @@ Aufgaben:
    - Fallback
    - Preview-/Hilfsmodelle
 4. CPU-Thread-Default fuer das NAS setzen.
+5. bewusst pruefen, ob nutzbare GPU-/Render-Devices im Container sichtbar sind.
 
 Abnahmekriterium:
 
@@ -230,6 +357,7 @@ Aufgaben:
    - Tag-Regeln
    - Task Manager
    testen.
+4. Task Manager mit persistentem Jobstatus zuerst absichern.
 
 Abnahmekriterium:
 
@@ -247,6 +375,7 @@ Aufgaben:
 2. `paperless.conf`-Ersatz oder Container-Env-Modell festlegen.
 3. Backfill-Skripte Docker-kompatibel machen.
 4. Hintergrundjobs ohne Systemd, nur ueber Webkonsole + Containerprozess.
+5. Logdateien und Statusdateien in persistentem Volume halten.
 
 Abnahmekriterium:
 
@@ -291,6 +420,7 @@ Aufgaben:
    - Config
    - Prompts
    - Jobstatus
+6. Scanner-Ingest inkl. NFS-/Rechte-Test im Realbetrieb pruefen.
 
 Abnahmekriterium:
 
@@ -349,6 +479,16 @@ Deshalb:
 - alle Pfade neu fuer NAS-Docker denken
 - keine `/opt/paperless`-Annahmen im Zielsystem
 
+### 2b. NFS-/Scanner-Ingest
+
+Wenn der Scanner direkt auf einen freigegebenen Ordner schreibt:
+
+- koennen halbfertige Dateien konsumiert werden
+- koennen Rechteprobleme entstehen
+- koennen Event-/Polling-Unterschiede auftreten
+
+Deshalb muss dieser Pfad frueh und real getestet werden.
+
 ### 3. Mischkonfiguration
 
 Nicht halb Host, halb Container.
@@ -369,6 +509,8 @@ Der NAS-Docker-Stand ist dann erreicht, wenn:
 - die `:3000`-Konsole Review und Backfill steuert
 - der Task Manager Hintergrundjobs ohne Shell sichtbar macht
 - Konfiguration komplett ueber Dateien/Volumes und Weboberflaeche steuerbar ist
+- der Scanner/NFS-Ingest mit echten PDFs stabil im Consume-Ordner landet
+- Containerrechte fuer Consume und Media sauber funktionieren
 
 ## Datei fuer den Start auf dem NAS
 
@@ -388,6 +530,7 @@ Diese Dateien sollen als Naechstes entstehen:
 - `config/tag_rules.example.json`
 - `docs/NAS_DEPLOYMENT.md`
 - `scripts/bootstrap-nas-stack.sh`
+- `docs/SCANNER_INGEST.md`
 
 ## Kurzfazit
 
