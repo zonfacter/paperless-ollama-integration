@@ -3154,10 +3154,11 @@ def ollama_num_thread() -> int:
 
 
 def default_preview_config() -> dict[str, str]:
+    default_local_ocr_url = os.getenv("PAPERLESS_PROVIDER_LOCAL_OCR_URL", "http://127.0.0.1:8091")
     return {
         "preview_ocr_model": os.getenv("PAPERLESS_PREVIEW_OCR_MODEL", "qwen3.5:4b"),
         "ocr_source": os.getenv("PAPERLESS_PREVIEW_OCR_SOURCE", "paperless"),
-        "paddleocr_api_url": os.getenv("PAPERLESS_PREVIEW_PADDLEOCR_API_URL", "http://127.0.0.1:8091"),
+        "paddleocr_api_url": os.getenv("PAPERLESS_PREVIEW_PADDLEOCR_API_URL", default_local_ocr_url),
         "paddleocr_timeout_seconds": os.getenv("PAPERLESS_PREVIEW_PADDLEOCR_TIMEOUT_SECONDS", "90"),
         "paddleocr_max_pages": os.getenv("PAPERLESS_PREVIEW_PADDLEOCR_MAX_PAGES", "1"),
         "vision_model": os.getenv("PAPERLESS_PREVIEW_VISION_MODEL", "qwen3.5:0.8b"),
@@ -3170,12 +3171,13 @@ def default_preview_config() -> dict[str, str]:
 
 
 def default_provider_config() -> dict[str, str]:
+    default_local_ocr_url = os.getenv("PAPERLESS_PROVIDER_LOCAL_OCR_URL", "http://127.0.0.1:8091")
     return {
         "active_ollama_provider": "local",
         "local_ollama_url": OLLAMA_URL,
         "remote_ollama_url": "",
         "active_ocr_provider": "local",
-        "local_ocr_url": "http://127.0.0.1:8091",
+        "local_ocr_url": default_local_ocr_url,
         "remote_ocr_url": "",
     }
 
