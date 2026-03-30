@@ -124,20 +124,33 @@ HTML = """<!doctype html>
       gap: 10px;
     }
     .nav-btn {
+      position: relative;
+      overflow: hidden;
       width: 100%;
       min-width: 0;
       text-align: left;
-      padding: 14px 14px;
-      border-radius: 18px;
+      padding: 15px 15px 15px 18px;
+      border-radius: 20px;
       background: rgba(255,255,255,0.76);
       color: var(--ink);
       box-shadow: none;
       border: 1px solid var(--line);
+      transition: background .18s ease, border-color .18s ease, box-shadow .18s ease, transform .18s ease;
+    }
+    .nav-btn::before {
+      content: "";
+      position: absolute;
+      inset: 8px auto 8px 8px;
+      width: 4px;
+      border-radius: 999px;
+      background: linear-gradient(180deg, rgba(11, 107, 203, 0.18), rgba(14, 159, 110, 0.12));
+      opacity: 0.75;
     }
     .nav-btn:hover:not(.active) {
-      transform: none;
-      box-shadow: none;
+      transform: translateY(-1px);
+      box-shadow: 0 14px 28px rgba(15, 23, 40, 0.08);
       background: rgba(255,255,255,0.92);
+      border-color: rgba(11, 107, 203, 0.16);
     }
     .nav-btn.active {
       background: linear-gradient(135deg, var(--accent), #2e89ea);
@@ -145,13 +158,36 @@ HTML = """<!doctype html>
       border-color: transparent;
       box-shadow: 0 16px 30px rgba(11, 107, 203, 0.22);
     }
+    .nav-btn.active::before {
+      background: rgba(255,255,255,0.82);
+      opacity: 1;
+    }
     .nav-btn small {
       display: block;
-      margin-top: 4px;
-      opacity: 0.8;
+      margin-top: 5px;
+      opacity: 0.82;
       font-size: 12px;
       font-weight: 500;
       letter-spacing: 0;
+      line-height: 1.4;
+    }
+    .nav-btn[data-view-target="review-view"]::before {
+      background: linear-gradient(180deg, rgba(14, 159, 110, 0.44), rgba(14, 159, 110, 0.16));
+    }
+    .nav-btn[data-view-target="tasks-view"]::before {
+      background: linear-gradient(180deg, rgba(245, 158, 11, 0.46), rgba(245, 158, 11, 0.18));
+    }
+    .nav-btn[data-view-target="models-view"]::before {
+      background: linear-gradient(180deg, rgba(11, 107, 203, 0.46), rgba(11, 107, 203, 0.18));
+    }
+    .nav-btn[data-view-target="providers-view"]::before {
+      background: linear-gradient(180deg, rgba(99, 102, 241, 0.42), rgba(99, 102, 241, 0.16));
+    }
+    .nav-btn[data-view-target="control-view"]::before {
+      background: linear-gradient(180deg, rgba(6, 148, 162, 0.42), rgba(6, 148, 162, 0.16));
+    }
+    .nav-btn[data-view-target="chat-view"]::before {
+      background: linear-gradient(180deg, rgba(168, 85, 247, 0.42), rgba(168, 85, 247, 0.16));
     }
     .layout-toggle {
       display: inline-flex;
