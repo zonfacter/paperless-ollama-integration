@@ -910,6 +910,22 @@ HTML = """<!doctype html>
                     <span class="pill">Review vor Apply</span>
                   </div>
                 </div>
+                <div class="provider-diagram">
+                  <div class="flow-node active">
+                    <strong>Dokumentauswahl</strong>
+                    <span>Suche, Auswahl und Einzeldokument-Review direkt aus dem Archivbestand.</span>
+                  </div>
+                  <div class="flow-arrow">→</div>
+                  <div class="flow-node active">
+                    <strong>KI-Vorschau</strong>
+                    <span>OCR, Struktur, optionale Zusatzpfade und Metadatenvorschlag vor dem Schreiben.</span>
+                  </div>
+                  <div class="flow-arrow">→</div>
+                  <div class="flow-node active">
+                    <strong>Apply oder Batch</strong>
+                    <span>Einzeln uebernehmen oder als Hintergrund-Backfill fuer viele Dokumente starten.</span>
+                  </div>
+                </div>
                 <div class="radio-group">
                   <div class="radio-card">
                     <label>
@@ -1109,6 +1125,22 @@ HTML = """<!doctype html>
                   <div class="summary-bar">
                     <span class="pill">Chat + Paperless</span>
                     <span class="pill">Fallback-faehig</span>
+                  </div>
+                </div>
+                <div class="provider-diagram">
+                  <div class="flow-node active">
+                    <strong>Importpfad</strong>
+                    <span>Das Primärmodell verarbeitet neue Dokumente und normale Backfills.</span>
+                  </div>
+                  <div class="flow-arrow">→</div>
+                  <div class="flow-node active">
+                    <strong>Fallback</strong>
+                    <span>Greift optional bei Timeout oder spaeteren Sonderfaellen.</span>
+                  </div>
+                  <div class="flow-arrow">→</div>
+                  <div class="flow-node active">
+                    <strong>Review-Regeln</strong>
+                    <span>Confidence, Tag-Regeln und Nachpruefungs-Tags steuern die Qualitaet.</span>
                   </div>
                 </div>
                 <div class="config-grid">
@@ -1360,21 +1392,57 @@ HTML = """<!doctype html>
                     <span class="pill">Provider-faehig</span>
                   </div>
                 </div>
-                <div class="config-grid">
-                  <div class="field">
-                    <label for="model-library-json">Modellbibliothek (JSON)</label>
-                    <textarea id="model-library-json" class="prompt-box" style="min-height:260px" placeholder='[{"name":"qwen3.5:9b","role":"paperless_primary","provider":"ollama_local","homepage":"https://ollama.com/library/qwen3.5:9b"}]'></textarea>
-                    <small>Lokale Bibliothek fuer Modelle, Rollen und Referenzlinks. Diese Datei bleibt lokal und kann spaeter auf dem NAS weitergefuehrt werden.</small>
+                <div class="provider-diagram">
+                  <div class="flow-node active">
+                    <strong>Bibliothek</strong>
+                    <span>Modelle, Rollen und Referenzlinks fuer Import, Preview, Tag-Review und Chat.</span>
                   </div>
-                  <div class="field">
-                    <label for="model-install-name">Lokales Ollama-Modell installieren</label>
-                    <input id="model-install-name" type="text" placeholder="qwen3.5:4b">
-                    <small>Einfacher lokaler Installationspfad fuer die native VM. Nutzt `ollama pull` auf dem aktuellen Host.</small>
+                  <div class="flow-arrow">→</div>
+                  <div class="flow-node active">
+                    <strong>Installation</strong>
+                    <span>Lokale VM-Installation oder spaeter externe Modellquellen per Provider.</span>
                   </div>
-                  <div class="field">
-                    <label for="model-install-link">Externer Modell-Link</label>
-                    <input id="model-install-link" type="text" placeholder="https://ollama.com/library/qwen3.5:4b">
-                    <small>Nur als Referenz/Installationshilfe. So bleibt spaeter auch ein externer NAS-Workflow dokumentiert.</small>
+                  <div class="flow-arrow">→</div>
+                  <div class="flow-node active">
+                    <strong>Zuweisung</strong>
+                    <span>Die eigentliche Aktivierung passiert weiter ueber Modellstrategie und Preview-Konfiguration.</span>
+                  </div>
+                </div>
+                <div class="provider-split">
+                  <div class="provider-panel local">
+                    <div class="provider-panel-head">
+                      <div>
+                        <h3>Lokale Modellbibliothek</h3>
+                        <p>Pflegt Modellrollen, Provider-Referenzen und spaetere NAS-kompatible Zuordnungen.</p>
+                      </div>
+                      <span class="provider-badge active">Lokal</span>
+                    </div>
+                    <div class="field">
+                      <label for="model-library-json">Modellbibliothek (JSON)</label>
+                      <textarea id="model-library-json" class="prompt-box" style="min-height:260px" placeholder='[{"name":"qwen3.5:9b","role":"paperless_primary","provider":"ollama_local","homepage":"https://ollama.com/library/qwen3.5:9b"}]'></textarea>
+                      <small>Lokale Bibliothek fuer Modelle, Rollen und Referenzlinks. Diese Datei bleibt lokal und kann spaeter auf dem NAS weitergefuehrt werden.</small>
+                    </div>
+                  </div>
+                  <div class="provider-panel remote">
+                    <div class="provider-panel-head">
+                      <div>
+                        <h3>Installation & externe Referenzen</h3>
+                        <p>Lokaler Pull fuer die VM und gleichzeitig saubere Referenz auf spaetere NAS-/Remote-Quellen.</p>
+                      </div>
+                      <span class="provider-badge">Hybrid</span>
+                    </div>
+                    <div class="config-grid">
+                      <div class="field">
+                        <label for="model-install-name">Lokales Ollama-Modell installieren</label>
+                        <input id="model-install-name" type="text" placeholder="qwen3.5:4b">
+                        <small>Einfacher lokaler Installationspfad fuer die native VM. Nutzt `ollama pull` auf dem aktuellen Host.</small>
+                      </div>
+                      <div class="field">
+                        <label for="model-install-link">Externer Modell-Link</label>
+                        <input id="model-install-link" type="text" placeholder="https://ollama.com/library/qwen3.5:4b">
+                        <small>Nur als Referenz/Installationshilfe. So bleibt spaeter auch ein externer NAS-Workflow dokumentiert.</small>
+                      </div>
+                    </div>
                   </div>
                 </div>
                 <div class="actions">
@@ -1488,6 +1556,22 @@ HTML = """<!doctype html>
               </div>
             </section>
             <section id="chat-view" class="view">
+              <div class="provider-diagram" style="margin: 22px 22px 0;">
+                <div class="flow-node active">
+                  <strong>Browser</strong>
+                  <span>Direkte Modelltests ohne Paperless-Job und ohne Metadaten-Schreibpfad.</span>
+                </div>
+                <div class="flow-arrow">→</div>
+                <div class="flow-node active">
+                  <strong>Aktives Chat-Modell</strong>
+                  <span>Nutze lokale Modelle fuer schnelle Tests oder spaeter externe Provider.</span>
+                </div>
+                <div class="flow-arrow">→</div>
+                <div class="flow-node active">
+                  <strong>Antwort</strong>
+                  <span>Ideal fuer Modellvergleich, Prompttests und schnelle Gegenproben.</span>
+                </div>
+              </div>
               <div class="controls">
                 <select id="model"></select>
                 <button id="clear">Verlauf loeschen</button>
