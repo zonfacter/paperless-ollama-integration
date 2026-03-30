@@ -97,6 +97,7 @@ Hinweise:
   - `consumer`: pollt `/usr/src/paperless/consume`
   - `task-queue`: Celery-Worker ist mit Redis verbunden
   - `scheduler`: Celery Beat laeuft
+- Der Scheduler nutzt bewusst `--schedule=/tmp/celerybeat-schedule`, um einen bekannten Celery-Beat-Pfadfehler mit persistenten Schedule-Dateien auf diesem Stack zu umgehen.
 
 ## Zweiter Schritt
 

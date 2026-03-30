@@ -198,6 +198,7 @@ services:
       - beat
       - --loglevel
       - INFO
+      - --schedule=/tmp/celerybeat-schedule
     healthcheck:
       disable: true
     volumes:
