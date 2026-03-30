@@ -51,7 +51,7 @@ services:
       - paperless-ai
 
   webserver:
-    image: ghcr.io/paperless-ngx/paperless-ngx:2.18.4
+    image: ghcr.io/paperless-ngx/paperless-ngx:2.20.3
     container_name: paperless-webserver
     restart: unless-stopped
     depends_on:
@@ -96,7 +96,7 @@ services:
       - paperless-ai
 
   consumer:
-    image: ghcr.io/paperless-ngx/paperless-ngx:2.18.4
+    image: ghcr.io/paperless-ngx/paperless-ngx:2.20.3
     container_name: paperless-consumer
     restart: unless-stopped
     entrypoint: []
@@ -134,7 +134,7 @@ services:
       - paperless-ai
 
   task-queue:
-    image: ghcr.io/paperless-ngx/paperless-ngx:2.18.4
+    image: ghcr.io/paperless-ngx/paperless-ngx:2.20.3
     container_name: paperless-task-queue
     restart: unless-stopped
     entrypoint: []
@@ -176,7 +176,7 @@ services:
       - paperless-ai
 
   scheduler:
-    image: ghcr.io/paperless-ngx/paperless-ngx:2.18.4
+    image: ghcr.io/paperless-ngx/paperless-ngx:2.20.3
     container_name: paperless-scheduler
     restart: unless-stopped
     entrypoint: []
