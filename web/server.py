@@ -636,6 +636,45 @@ HTML = """<!doctype html>
       border-color: transparent;
       box-shadow: 0 12px 24px rgba(11, 107, 203, 0.18);
     }
+    .status-badge {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      min-width: 86px;
+      padding: 7px 12px;
+      border-radius: 999px;
+      border: 1px solid var(--line);
+      background: rgba(255,255,255,0.88);
+      color: var(--muted);
+      font-size: 11px;
+      font-weight: 800;
+      letter-spacing: 0.08em;
+      text-transform: uppercase;
+    }
+    .status-badge.running {
+      background: linear-gradient(135deg, #0e9f6e, #2fb786);
+      color: white;
+      border-color: transparent;
+      box-shadow: 0 12px 24px rgba(14, 159, 110, 0.18);
+    }
+    .status-badge.done {
+      background: linear-gradient(135deg, #0b6bcb, #2e89ea);
+      color: white;
+      border-color: transparent;
+      box-shadow: 0 12px 24px rgba(11, 107, 203, 0.18);
+    }
+    .status-badge.error {
+      background: linear-gradient(135deg, #dc6803, #f79009);
+      color: white;
+      border-color: transparent;
+      box-shadow: 0 12px 24px rgba(220, 104, 3, 0.18);
+    }
+    .status-badge.starting {
+      background: linear-gradient(135deg, #667085, #98a2b3);
+      color: white;
+      border-color: transparent;
+      box-shadow: 0 12px 24px rgba(102, 112, 133, 0.18);
+    }
     .provider-diagram {
       display: grid;
       grid-template-columns: minmax(0, 1fr) 42px minmax(0, 1fr) 42px minmax(0, 1fr);
@@ -1071,6 +1110,22 @@ HTML = """<!doctype html>
                     <span class="pill">Backfill</span>
                     <span class="pill">Persistent</span>
                     <span class="pill">Ohne Shell</span>
+                  </div>
+                </div>
+                <div class="provider-diagram">
+                  <div class="flow-node active">
+                    <strong>Start</strong>
+                    <span>Backfill und groessere Nachlaeufe starten aus der Weboberflaeche im Hintergrund.</span>
+                  </div>
+                  <div class="flow-arrow">→</div>
+                  <div class="flow-node active">
+                    <strong>Ueberwachung</strong>
+                    <span>Task Manager zeigt Jobstatus, letzte Aktivitaet, Fehlergrund und Systemlast.</span>
+                  </div>
+                  <div class="flow-arrow">→</div>
+                  <div class="flow-node active">
+                    <strong>Aktionen</strong>
+                    <span>Jobs aktualisieren, abbrechen oder aus dem Task Manager entfernen ohne Shellzugriff.</span>
                   </div>
                 </div>
                 <div class="actions">
@@ -2631,13 +2686,14 @@ HTML = """<!doctype html>
         const countText = job.document_count ? `${job.document_count} Dokumente` : 'Dokumentanzahl unbekannt';
         const startedText = job.started_at || 'Startzeit unbekannt';
         const statusText = job.status || 'unbekannt';
+        const statusClass = String(statusText).toLowerCase().replace(/[^a-z0-9_-]/g, '');
         const activeClass = activeTaskJobId === job.id ? ' active' : '';
         return `
           <button class="doc-row${activeClass}" data-task-job-id="${job.id}" type="button">
             <div class="doc-main">
               <div class="doc-title">${job.id}</div>
               <div class="doc-meta">${countText} · ${startedText}</div>
-              <div class="doc-meta"><span class="pill">${statusText}</span></div>
+              <div class="doc-meta"><span class="status-badge ${statusClass}">${statusText}</span></div>
             </div>
           </button>
         `;
@@ -2659,9 +2715,11 @@ HTML = """<!doctype html>
       activeTaskJobId = job.id || null;
       tasksCancelSelectedBtn.disabled = !['running', 'starting'].includes(String(job.status || ''));
       tasksDeleteSelectedBtn.disabled = false;
+      const detailStatus = String(job.status || 'unbekannt');
+      const detailStatusClass = detailStatus.toLowerCase().replace(/[^a-z0-9_-]/g, '');
       tasksDetailMetaEl.innerHTML = `
         <div class="meta-row"><div class="meta-label">Job-ID</div><div>${formatValue(job.id)}</div></div>
-        <div class="meta-row"><div class="meta-label">Status</div><div>${formatValue(job.status)}</div></div>
+        <div class="meta-row"><div class="meta-label">Status</div><div><span class="status-badge ${detailStatusClass}">${formatValue(job.status)}</span></div></div>
         <div class="meta-row"><div class="meta-label">Dokumente</div><div>${formatValue(job.document_count)}</div></div>
         <div class="meta-row"><div class="meta-label">Gestartet</div><div>${formatValue(job.started_at)}</div></div>
         <div class="meta-row"><div class="meta-label">Beendet</div><div>${formatValue(job.finished_at)}</div></div>
