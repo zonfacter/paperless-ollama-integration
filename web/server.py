@@ -2137,6 +2137,9 @@ HTML = """<!doctype html>
         <div class="meta-row"><div class="meta-label">Gestartet</div><div>${formatValue(job.started_at)}</div></div>
         <div class="meta-row"><div class="meta-label">Beendet</div><div>${formatValue(job.finished_at)}</div></div>
         <div class="meta-row"><div class="meta-label">Returncode</div><div>${formatValue(job.returncode)}</div></div>
+        <div class="meta-row"><div class="meta-label">Fehlergrund</div><div>${formatValue(job.error_reason || job.error)}</div></div>
+        <div class="meta-row"><div class="meta-label">Letzte Dokument-ID</div><div>${formatValue(job.last_document_id || job.last_analyzed_document_id)}</div></div>
+        <div class="meta-row"><div class="meta-label">Letzte Aktivitaet</div><div>${formatValue(job.last_activity)}</div></div>
         <div class="meta-row"><div class="meta-label">Logdatei</div><div>${formatValue(job.log_path)}</div></div>
         <div class="meta-row"><div class="meta-label">Vorbereitung</div><div>${formatValue(job.clear_summary)}</div></div>
       `;
@@ -4232,6 +4235,39 @@ def _extract_backfill_completion(log_text: str) -> tuple[str | None, int | None]
     return status, returncode
 
 
+def _extract_backfill_log_details(log_text: str) -> dict:
+    details: dict[str, object] = {}
+    selected_match = re.search(r"Selected (\d+) document\(s\)", log_text)
+    if selected_match:
+        details["document_count"] = int(selected_match.group(1))
+    processed = re.findall(r"\[paperless-ai-backfill\] Processing document (\d+)", log_text)
+    if processed:
+        details["last_document_id"] = int(processed[-1])
+    analyzed = re.findall(
+        r"\[paperless-ai\] LLM analyzed document (\d+) in ([0-9.]+)s using ([^;]+)(?:; tag_review=([^\n]+))?",
+        log_text,
+    )
+    if analyzed:
+        doc_id, seconds, model_name, tag_model = analyzed[-1]
+        details["last_analyzed_document_id"] = int(doc_id)
+        details["last_duration_seconds"] = float(seconds)
+        details["last_model"] = model_name.strip()
+        if tag_model:
+            details["last_tag_review_model"] = tag_model.strip()
+    error_reason = ""
+    failure_match = re.search(r"Job failed before completion:\s*(.+)", log_text)
+    if failure_match:
+        error_reason = failure_match.group(1).strip()
+    elif "Hintergrundprozess laeuft nicht mehr" in log_text:
+        error_reason = "Hintergrundprozess laeuft nicht mehr"
+    if error_reason:
+        details["error_reason"] = error_reason
+    activity_lines = [line.strip() for line in log_text.splitlines() if line.strip()]
+    if activity_lines:
+        details["last_activity"] = activity_lines[-1]
+    return details
+
+
 def read_backfill_job_payload(job_id: str) -> tuple[int, dict]:
     job = read_backfill_job(job_id)
     if job is None:
@@ -4241,12 +4277,14 @@ def read_backfill_job_payload(job_id: str) -> tuple[int, dict]:
     if log_path:
         full_tail = _tail_text_file(str(log_path), max_chars=40000)
         payload["tail"] = full_tail[-12000:]
+        payload.update(_extract_backfill_log_details(full_tail))
         completion_status, returncode = _extract_backfill_completion(full_tail)
         if completion_status:
             payload["status"] = completion_status
         elif payload.get("status") == "running" and not _process_alive(payload.get("pid")):
             payload["status"] = "error"
             payload["error"] = "Hintergrundprozess laeuft nicht mehr"
+            payload.setdefault("error_reason", "Hintergrundprozess laeuft nicht mehr")
         if returncode is not None:
             payload["returncode"] = returncode
         store_backfill_job(job_id, payload)
@@ -4262,12 +4300,14 @@ def read_latest_backfill_job_payload() -> tuple[int, dict]:
     if log_path:
         full_tail = _tail_text_file(str(log_path), max_chars=40000)
         payload["tail"] = full_tail[-12000:]
+        payload.update(_extract_backfill_log_details(full_tail))
         completion_status, returncode = _extract_backfill_completion(full_tail)
         if completion_status:
             payload["status"] = completion_status
         elif payload.get("status") == "running" and not _process_alive(payload.get("pid")):
             payload["status"] = "error"
             payload["error"] = "Hintergrundprozess laeuft nicht mehr"
+            payload.setdefault("error_reason", "Hintergrundprozess laeuft nicht mehr")
         if returncode is not None:
             payload["returncode"] = returncode
         store_backfill_job(str(payload["id"]), payload)
