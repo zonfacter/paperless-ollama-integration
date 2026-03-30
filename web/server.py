@@ -4297,13 +4297,18 @@ def read_system_metrics() -> tuple[int, dict]:
     disk_used = max(disk_total - disk_free, 0)
     disk_percent = round((disk_used / disk_total) * 100, 1) if disk_total else 0.0
     gpu_devices = []
+    render_devices = []
     dri_root = Path("/dev/dri")
     if dri_root.exists():
         for child in sorted(dri_root.iterdir()):
             gpu_devices.append(child.name)
-    gpu_available = bool(gpu_devices)
+            if child.name.startswith("renderD"):
+                render_devices.append(child.name)
+    gpu_available = bool(render_devices)
     gpu_note = ""
-    if not gpu_available:
+    if gpu_devices and not render_devices:
+        gpu_note = "Grafikgeraet sichtbar, aber keine nutzbare Render-Schnittstelle"
+    if not gpu_devices:
         try:
             lspci = subprocess.run(
                 ["lspci"],
@@ -4331,7 +4336,8 @@ def read_system_metrics() -> tuple[int, dict]:
         "gpu": {
             "available": gpu_available,
             "devices": gpu_devices,
-            "label": "GPU / iGPU erkannt" if gpu_available else "",
+            "render_devices": render_devices,
+            "label": "Nutzbare GPU / iGPU erkannt" if gpu_available else "",
             "note": gpu_note,
         },
     }
