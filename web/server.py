@@ -29,6 +29,8 @@ PAPERLESS_MODEL_HELPER = os.getenv("PAPERLESS_MODEL_HELPER", "/usr/local/sbin/pa
 PAPERLESS_AI_HELPER = os.getenv("PAPERLESS_AI_HELPER", "/usr/local/sbin/paperless-ai-admin")
 PREVIEW_CONFIG_PATH = os.getenv("PAPERLESS_PREVIEW_CONFIG_PATH", "/home/thomas/ollama-web/preview_config.json")
 BACKFILL_STATE_PATH = os.getenv("PAPERLESS_BACKFILL_STATE_PATH", "/home/thomas/ollama-web/backfill_jobs.json")
+PROVIDER_CONFIG_PATH = os.getenv("PAPERLESS_PROVIDER_CONFIG_PATH", "/home/thomas/ollama-web/provider_config.json")
+MODEL_CONFIG_PATH = os.getenv("PAPERLESS_MODEL_CONFIG_PATH", "/home/thomas/ollama-web/model_config.json")
 PADDLEOCR_API_INSTALL_SCRIPT = os.getenv(
     "PADDLEOCR_API_INSTALL_SCRIPT",
     "/home/hytale/paperless-ollama-integration/scripts/install-paddleocr-api.sh",
@@ -729,6 +731,14 @@ HTML = """<!doctype html>
               Task Manager
               <small>Hintergrundjobs, Laufstatus und Logs ohne Shell verfolgen.</small>
             </button>
+            <button class="nav-btn" data-view-target="models-view" type="button">
+              Modelle
+              <small>Rollen, Installationshilfe und lokale Modellquellen pflegen.</small>
+            </button>
+            <button class="nav-btn" data-view-target="providers-view" type="button">
+              Provider
+              <small>Lokale und externe KI-/OCR-Dienste anbinden und testen.</small>
+            </button>
             <button class="nav-btn" data-view-target="control-view" type="button">
               Steuerung
               <small>Modelle, Prompt, OCR-Kontext, Timeout und Fallback verwalten.</small>
@@ -1228,6 +1238,111 @@ HTML = """<!doctype html>
                 <div id="prompt-status" class="statusline">Prompt noch nicht geladen.</div>
               </div>
             </section>
+            <section id="models-view" class="view">
+              <div class="section">
+                <div class="section-head">
+                  <div>
+                    <h2>Modelle</h2>
+                    <p>
+                      Hier pflegst du die Rollen der Modelle, Installationshinweise und lokale Referenzen.
+                      Die eigentliche Modellstrategie bleibt weiterhin unter `Steuerung`.
+                    </p>
+                  </div>
+                  <div class="summary-bar">
+                    <span class="pill">Lokale Bibliothek</span>
+                    <span class="pill">Installationshilfe</span>
+                    <span class="pill">Provider-faehig</span>
+                  </div>
+                </div>
+                <div class="config-grid">
+                  <div class="field">
+                    <label for="model-library-json">Modellbibliothek (JSON)</label>
+                    <textarea id="model-library-json" class="prompt-box" style="min-height:260px" placeholder='[{"name":"qwen3.5:9b","role":"paperless_primary","provider":"ollama_local","homepage":"https://ollama.com/library/qwen3.5:9b"}]'></textarea>
+                    <small>Lokale Bibliothek fuer Modelle, Rollen und Referenzlinks. Diese Datei bleibt lokal und kann spaeter auf dem NAS weitergefuehrt werden.</small>
+                  </div>
+                  <div class="field">
+                    <label for="model-install-name">Lokales Ollama-Modell installieren</label>
+                    <input id="model-install-name" type="text" placeholder="qwen3.5:4b">
+                    <small>Einfacher lokaler Installationspfad fuer die native VM. Nutzt `ollama pull` auf dem aktuellen Host.</small>
+                  </div>
+                  <div class="field">
+                    <label for="model-install-link">Externer Modell-Link</label>
+                    <input id="model-install-link" type="text" placeholder="https://ollama.com/library/qwen3.5:4b">
+                    <small>Nur als Referenz/Installationshilfe. So bleibt spaeter auch ein externer NAS-Workflow dokumentiert.</small>
+                  </div>
+                </div>
+                <div class="actions">
+                  <button id="save-model-config">Modellbibliothek speichern</button>
+                  <button id="reload-model-config" class="secondary">Neu laden</button>
+                  <button id="install-local-model" class="secondary">Lokal installieren</button>
+                </div>
+                <div id="model-config-status" class="statusline">Modellbereich noch nicht geladen.</div>
+                <div id="model-install-output" class="logbox">Noch keine Installationsausgabe.</div>
+              </div>
+            </section>
+            <section id="providers-view" class="view">
+              <div class="section">
+                <div class="section-head">
+                  <div>
+                    <h2>Provider</h2>
+                    <p>
+                      Bereite lokale und externe KI-/OCR-Dienste vor. So bleibt die VM-Weboberflaeche
+                      kompatibel mit spaeteren NAS- oder Remote-Docker-Setups.
+                    </p>
+                  </div>
+                  <div class="summary-bar">
+                    <span class="pill">ollama local</span>
+                    <span class="pill">ollama remote</span>
+                    <span class="pill">OCR API</span>
+                  </div>
+                </div>
+                <div class="config-grid">
+                  <div class="field">
+                    <label for="provider-active-ollama">Aktiver Ollama-Provider</label>
+                    <select id="provider-active-ollama">
+                      <option value="local">Lokal</option>
+                      <option value="remote">Remote</option>
+                    </select>
+                    <small>Steuert, welche Ollama-Quelle bevorzugt fuer kuenftige Ausbaustufen gedacht ist.</small>
+                  </div>
+                  <div class="field">
+                    <label for="provider-local-ollama-url">Lokale Ollama-URL</label>
+                    <input id="provider-local-ollama-url" type="text" placeholder="http://127.0.0.1:11434">
+                    <small>Native VM oder spaeter lokaler Docker-Dienst.</small>
+                  </div>
+                  <div class="field">
+                    <label for="provider-remote-ollama-url">Externe Ollama-URL</label>
+                    <input id="provider-remote-ollama-url" type="text" placeholder="http://nas-host:11434">
+                    <small>Fuer spaetere NAS- oder andere Docker-Hosts im LAN.</small>
+                  </div>
+                  <div class="field">
+                    <label for="provider-active-ocr">Aktiver OCR-Zusatzpfad</label>
+                    <select id="provider-active-ocr">
+                      <option value="local">Lokal</option>
+                      <option value="remote">Remote</option>
+                    </select>
+                    <small>Vorbereitung fuer lokale oder externe OCR-APIs.</small>
+                  </div>
+                  <div class="field">
+                    <label for="provider-local-ocr-url">Lokale OCR-API URL</label>
+                    <input id="provider-local-ocr-url" type="text" placeholder="http://127.0.0.1:8091">
+                    <small>Aktueller lokaler `PaddleOCR`- oder spaeter anderer OCR-Dienst.</small>
+                  </div>
+                  <div class="field">
+                    <label for="provider-remote-ocr-url">Externe OCR-API URL</label>
+                    <input id="provider-remote-ocr-url" type="text" placeholder="http://nas-host:8091">
+                    <small>Vorbereitung fuer OCR-Docker ausserhalb dieser VM.</small>
+                  </div>
+                </div>
+                <div class="actions">
+                  <button id="save-provider-config">Provider speichern</button>
+                  <button id="reload-provider-config" class="secondary">Neu laden</button>
+                  <button id="test-provider-config" class="secondary">Provider testen</button>
+                </div>
+                <div id="provider-config-status" class="statusline">Providerbereich noch nicht geladen.</div>
+                <div id="provider-test-output" class="logbox">Noch kein Verbindungstest ausgefuehrt.</div>
+              </div>
+            </section>
             <section id="chat-view" class="view">
               <div class="controls">
                 <select id="model"></select>
@@ -1340,6 +1455,25 @@ HTML = """<!doctype html>
     const docProposalStatusEl = document.getElementById('doc-proposal-status');
     const docApplyProposalBtn = document.getElementById('doc-apply-proposal');
     const docDiscardProposalBtn = document.getElementById('doc-discard-proposal');
+    const modelLibraryJsonEl = document.getElementById('model-library-json');
+    const modelInstallNameEl = document.getElementById('model-install-name');
+    const modelInstallLinkEl = document.getElementById('model-install-link');
+    const saveModelConfigBtn = document.getElementById('save-model-config');
+    const reloadModelConfigBtn = document.getElementById('reload-model-config');
+    const installLocalModelBtn = document.getElementById('install-local-model');
+    const modelConfigStatusEl = document.getElementById('model-config-status');
+    const modelInstallOutputEl = document.getElementById('model-install-output');
+    const providerActiveOllamaEl = document.getElementById('provider-active-ollama');
+    const providerLocalOllamaUrlEl = document.getElementById('provider-local-ollama-url');
+    const providerRemoteOllamaUrlEl = document.getElementById('provider-remote-ollama-url');
+    const providerActiveOcrEl = document.getElementById('provider-active-ocr');
+    const providerLocalOcrUrlEl = document.getElementById('provider-local-ocr-url');
+    const providerRemoteOcrUrlEl = document.getElementById('provider-remote-ocr-url');
+    const saveProviderConfigBtn = document.getElementById('save-provider-config');
+    const reloadProviderConfigBtn = document.getElementById('reload-provider-config');
+    const testProviderConfigBtn = document.getElementById('test-provider-config');
+    const providerConfigStatusEl = document.getElementById('provider-config-status');
+    const providerTestOutputEl = document.getElementById('provider-test-output');
     const navButtons = Array.from(document.querySelectorAll('[data-view-target]'));
     const views = Array.from(document.querySelectorAll('.view'));
     const layoutSidebarBtn = document.getElementById('layout-sidebar');
@@ -1920,6 +2054,147 @@ HTML = """<!doctype html>
       }
     }
 
+    async function loadModelConfig() {
+      modelConfigStatusEl.textContent = 'Modellbereich wird geladen...';
+      modelConfigStatusEl.className = 'statusline';
+      try {
+        const res = await fetch('/api/models/config');
+        const data = await res.json();
+        if (!res.ok) throw new Error(data.error || 'Fehler');
+        modelLibraryJsonEl.value = data.library_json || '';
+        modelConfigStatusEl.textContent = 'Modellbereich geladen.';
+      } catch (err) {
+        modelConfigStatusEl.textContent = `Fehler: ${err.message}`;
+        modelConfigStatusEl.className = 'statusline warn';
+      }
+    }
+
+    async function saveModelConfigUi() {
+      saveModelConfigBtn.disabled = true;
+      modelConfigStatusEl.textContent = 'Modellbibliothek wird gespeichert...';
+      modelConfigStatusEl.className = 'statusline';
+      try {
+        const res = await fetch('/api/models/config', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ library_json: modelLibraryJsonEl.value })
+        });
+        const data = await res.json();
+        if (!res.ok) throw new Error(data.error || 'Fehler');
+        modelConfigStatusEl.textContent = 'Modellbibliothek gespeichert.';
+      } catch (err) {
+        modelConfigStatusEl.textContent = `Fehler: ${err.message}`;
+        modelConfigStatusEl.className = 'statusline warn';
+      } finally {
+        saveModelConfigBtn.disabled = false;
+      }
+    }
+
+    async function installLocalModelUi() {
+      const modelName = modelInstallNameEl.value.trim();
+      if (!modelName) {
+        modelConfigStatusEl.textContent = 'Bitte ein Modell fuer die Installation eintragen.';
+        modelConfigStatusEl.className = 'statusline warn';
+        return;
+      }
+      installLocalModelBtn.disabled = true;
+      modelConfigStatusEl.textContent = `Lokale Installation fuer ${modelName} laeuft...`;
+      modelConfigStatusEl.className = 'statusline';
+      try {
+        const res = await fetch('/api/models/install', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ model: modelName, link: modelInstallLinkEl.value.trim() })
+        });
+        const data = await res.json();
+        if (!res.ok) throw new Error(data.error || 'Fehler');
+        modelInstallOutputEl.textContent = [
+          `Modell: ${data.model || modelName}`,
+          `Returncode: ${data.returncode}`,
+          data.stdout || '',
+          data.stderr || '',
+          modelInstallLinkEl.value.trim() ? `Referenzlink: ${modelInstallLinkEl.value.trim()}` : ''
+        ].filter(Boolean).join('\\n\\n');
+        modelInstallOutputEl.scrollTop = modelInstallOutputEl.scrollHeight;
+        modelConfigStatusEl.textContent = `Lokale Installation fuer ${modelName} abgeschlossen.`;
+        await loadModels();
+      } catch (err) {
+        modelInstallOutputEl.textContent = `Fehler: ${err.message}`;
+        modelConfigStatusEl.textContent = 'Fehler bei der lokalen Installation.';
+        modelConfigStatusEl.className = 'statusline warn';
+      } finally {
+        installLocalModelBtn.disabled = false;
+      }
+    }
+
+    async function loadProviderConfigUi() {
+      providerConfigStatusEl.textContent = 'Providerbereich wird geladen...';
+      providerConfigStatusEl.className = 'statusline';
+      try {
+        const res = await fetch('/api/providers/config');
+        const data = await res.json();
+        if (!res.ok) throw new Error(data.error || 'Fehler');
+        providerActiveOllamaEl.value = data.active_ollama_provider || 'local';
+        providerLocalOllamaUrlEl.value = data.local_ollama_url || '';
+        providerRemoteOllamaUrlEl.value = data.remote_ollama_url || '';
+        providerActiveOcrEl.value = data.active_ocr_provider || 'local';
+        providerLocalOcrUrlEl.value = data.local_ocr_url || '';
+        providerRemoteOcrUrlEl.value = data.remote_ocr_url || '';
+        providerConfigStatusEl.textContent = 'Providerbereich geladen.';
+      } catch (err) {
+        providerConfigStatusEl.textContent = `Fehler: ${err.message}`;
+        providerConfigStatusEl.className = 'statusline warn';
+      }
+    }
+
+    async function saveProviderConfigUi() {
+      saveProviderConfigBtn.disabled = true;
+      providerConfigStatusEl.textContent = 'Provider werden gespeichert...';
+      providerConfigStatusEl.className = 'statusline';
+      try {
+        const res = await fetch('/api/providers/config', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            active_ollama_provider: providerActiveOllamaEl.value,
+            local_ollama_url: providerLocalOllamaUrlEl.value.trim(),
+            remote_ollama_url: providerRemoteOllamaUrlEl.value.trim(),
+            active_ocr_provider: providerActiveOcrEl.value,
+            local_ocr_url: providerLocalOcrUrlEl.value.trim(),
+            remote_ocr_url: providerRemoteOcrUrlEl.value.trim()
+          })
+        });
+        const data = await res.json();
+        if (!res.ok) throw new Error(data.error || 'Fehler');
+        providerConfigStatusEl.textContent = 'Provider gespeichert.';
+      } catch (err) {
+        providerConfigStatusEl.textContent = `Fehler: ${err.message}`;
+        providerConfigStatusEl.className = 'statusline warn';
+      } finally {
+        saveProviderConfigBtn.disabled = false;
+      }
+    }
+
+    async function testProviderConfigUi() {
+      testProviderConfigBtn.disabled = true;
+      providerConfigStatusEl.textContent = 'Provider-Test laeuft...';
+      providerConfigStatusEl.className = 'statusline';
+      try {
+        const res = await fetch('/api/providers/test', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({}) });
+        const data = await res.json();
+        if (!res.ok) throw new Error(data.error || 'Fehler');
+        providerTestOutputEl.textContent = JSON.stringify(data, null, 2);
+        providerTestOutputEl.scrollTop = providerTestOutputEl.scrollHeight;
+        providerConfigStatusEl.textContent = 'Provider-Test abgeschlossen.';
+      } catch (err) {
+        providerTestOutputEl.textContent = `Fehler: ${err.message}`;
+        providerConfigStatusEl.textContent = 'Fehler beim Provider-Test.';
+        providerConfigStatusEl.className = 'statusline warn';
+      } finally {
+        testProviderConfigBtn.disabled = false;
+      }
+    }
+
     async function savePreviewConfig() {
       savePreviewConfigBtn.disabled = true;
       previewConfigStatusEl.textContent = 'Preview-Konfiguration wird gespeichert...';
@@ -2460,6 +2735,12 @@ HTML = """<!doctype html>
     tasksRefreshSelectedBtn.addEventListener('click', () => loadBackfillJobStatus(activeTaskJobId || activeBackfillJobId));
     tasksCancelSelectedBtn.addEventListener('click', cancelSelectedTaskJob);
     tasksDeleteSelectedBtn.addEventListener('click', deleteSelectedTaskJob);
+    saveModelConfigBtn.addEventListener('click', saveModelConfigUi);
+    reloadModelConfigBtn.addEventListener('click', loadModelConfig);
+    installLocalModelBtn.addEventListener('click', installLocalModelUi);
+    saveProviderConfigBtn.addEventListener('click', saveProviderConfigUi);
+    reloadProviderConfigBtn.addEventListener('click', loadProviderConfigUi);
+    testProviderConfigBtn.addEventListener('click', testProviderConfigUi);
 
     loadModels().catch(() => {
       statusEl.textContent = 'Modelle konnten nicht geladen werden.';
@@ -2476,6 +2757,8 @@ HTML = """<!doctype html>
     loadLatestBackfillJobStatus();
     loadTaskJobs();
     loadSystemMetrics();
+    loadModelConfig();
+    loadProviderConfigUi();
   </script>
 </body>
 </html>
@@ -2544,6 +2827,99 @@ def default_preview_config() -> dict[str, str]:
         "vision_tag_name": os.getenv("PAPERLESS_PREVIEW_VISION_TAG_NAME", "KI Vision"),
         "vision_tag_color": os.getenv("PAPERLESS_PREVIEW_VISION_TAG_COLOR", "#d97706"),
     }
+
+
+def default_provider_config() -> dict[str, str]:
+    return {
+        "active_ollama_provider": "local",
+        "local_ollama_url": OLLAMA_URL,
+        "remote_ollama_url": "",
+        "active_ocr_provider": "local",
+        "local_ocr_url": "http://127.0.0.1:8091",
+        "remote_ocr_url": "",
+    }
+
+
+def load_provider_config() -> dict[str, str]:
+    config = default_provider_config()
+    path = Path(PROVIDER_CONFIG_PATH)
+    if path.is_file():
+        try:
+            loaded = json.loads(path.read_text(encoding="utf-8"))
+        except json.JSONDecodeError as exc:
+            raise RuntimeError(f"Invalid provider config: {exc}") from exc
+        if isinstance(loaded, dict):
+            for key in config:
+                value = loaded.get(key)
+                if value is not None and str(value).strip():
+                    config[key] = str(value).strip()
+    return config
+
+
+def save_provider_config(payload: dict) -> tuple[int, dict]:
+    allowed = default_provider_config()
+    current = load_provider_config()
+    for key in allowed:
+        value = str(payload.get(key, "")).strip()
+        if value:
+            current[key] = value
+    path = Path(PROVIDER_CONFIG_PATH)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(current, indent=2, ensure_ascii=True) + "\n", encoding="utf-8")
+    return 200, {"status": "ok"}
+
+
+def default_model_config() -> dict[str, object]:
+    return {
+        "library_json": json.dumps(
+            [
+                {
+                    "name": "qwen3.5:9b",
+                    "role": "paperless_primary",
+                    "provider": "ollama_local",
+                    "homepage": "https://ollama.com/library/qwen3.5:9b",
+                },
+                {
+                    "name": "qwen3.5:0.8b",
+                    "role": "paperless_fallback",
+                    "provider": "ollama_local",
+                    "homepage": "https://ollama.com/library/qwen3.5:0.8b",
+                },
+            ],
+            ensure_ascii=False,
+            indent=2,
+        )
+    }
+
+
+def load_model_config() -> dict[str, object]:
+    config = default_model_config()
+    path = Path(MODEL_CONFIG_PATH)
+    if path.is_file():
+        try:
+            loaded = json.loads(path.read_text(encoding="utf-8"))
+        except json.JSONDecodeError as exc:
+            raise RuntimeError(f"Invalid model config: {exc}") from exc
+        if isinstance(loaded, dict):
+            library_json = loaded.get("library_json")
+            if library_json is not None and str(library_json).strip():
+                config["library_json"] = str(library_json)
+    return config
+
+
+def save_model_config(payload: dict) -> tuple[int, dict]:
+    current = load_model_config()
+    library_json = str(payload.get("library_json", "")).strip()
+    if library_json:
+        try:
+            json.loads(library_json)
+        except json.JSONDecodeError as exc:
+            return 400, {"error": f"Ungueltiges JSON: {exc}"}
+        current["library_json"] = library_json
+    path = Path(MODEL_CONFIG_PATH)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(current, indent=2, ensure_ascii=True) + "\n", encoding="utf-8")
+    return 200, {"status": "ok"}
 
 
 def load_preview_config() -> dict[str, str]:
@@ -2662,6 +3038,59 @@ def read_paperless_config() -> tuple[int, dict]:
 
 def read_preview_config() -> tuple[int, dict]:
     return 200, load_preview_config()
+
+
+def read_provider_config() -> tuple[int, dict]:
+    return 200, load_provider_config()
+
+
+def read_model_config() -> tuple[int, dict]:
+    return 200, load_model_config()
+
+
+def provider_healthcheck(url: str, path: str = "/api/tags", timeout: int = 10) -> dict:
+    target = str(url or "").strip()
+    if not target:
+        return {"ok": False, "error": "keine URL gesetzt"}
+    full_url = f"{target.rstrip('/')}{path}"
+    try:
+        req = urllib.request.Request(full_url, method="GET")
+        with urllib.request.urlopen(req, timeout=timeout) as response:
+            body = response.read().decode("utf-8", errors="replace")
+            return {"ok": True, "status": response.status, "url": full_url, "body_excerpt": body[:300]}
+    except Exception as exc:
+        return {"ok": False, "url": full_url, "error": str(exc)}
+
+
+def test_provider_config() -> tuple[int, dict]:
+    config = load_provider_config()
+    return 200, {
+        "local_ollama": provider_healthcheck(config.get("local_ollama_url", ""), "/api/tags"),
+        "remote_ollama": provider_healthcheck(config.get("remote_ollama_url", ""), "/api/tags"),
+        "local_ocr": provider_healthcheck(config.get("local_ocr_url", ""), "/healthz"),
+        "remote_ocr": provider_healthcheck(config.get("remote_ocr_url", ""), "/healthz"),
+    }
+
+
+def install_local_model(model_name: str) -> tuple[int, dict]:
+    name = str(model_name or "").strip()
+    if not name:
+        return 400, {"error": "Kein Modellname angegeben"}
+    result = subprocess.run(
+        ["ollama", "pull", name],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    return (
+        200 if result.returncode == 0 else 500,
+        {
+            "model": name,
+            "returncode": result.returncode,
+            "stdout": result.stdout[-4000:],
+            "stderr": result.stderr[-4000:],
+        },
+    )
 
 
 def call_ai_helper(args: list[str]) -> tuple[int, dict]:
@@ -4671,6 +5100,20 @@ class Handler(BaseHTTPRequestHandler):
                 status, payload = 500, {"error": str(exc)}
             self._send(status, json.dumps(payload).encode("utf-8"), "application/json")
             return
+        if self.path == "/api/providers/config":
+            try:
+                status, payload = read_provider_config()
+            except Exception as exc:
+                status, payload = 500, {"error": str(exc)}
+            self._send(status, json.dumps(payload).encode("utf-8"), "application/json")
+            return
+        if self.path == "/api/models/config":
+            try:
+                status, payload = read_model_config()
+            except Exception as exc:
+                status, payload = 500, {"error": str(exc)}
+            self._send(status, json.dumps(payload).encode("utf-8"), "application/json")
+            return
         if self.path == "/api/paddleocr/install-plan":
             try:
                 status, payload = build_install_plan()
@@ -4767,6 +5210,10 @@ class Handler(BaseHTTPRequestHandler):
             "/api/paperless/model",
             "/api/paperless/config",
             "/api/preview/config",
+            "/api/providers/config",
+            "/api/models/config",
+            "/api/providers/test",
+            "/api/models/install",
             "/api/paperless/prompt",
             "/api/paperless/review-tags/clear",
         ):
@@ -4800,6 +5247,26 @@ class Handler(BaseHTTPRequestHandler):
         elif self.path == "/api/preview/config":
             try:
                 status, response = save_preview_config(payload)
+            except Exception as exc:
+                status, response = 500, {"error": str(exc)}
+        elif self.path == "/api/providers/config":
+            try:
+                status, response = save_provider_config(payload)
+            except Exception as exc:
+                status, response = 500, {"error": str(exc)}
+        elif self.path == "/api/models/config":
+            try:
+                status, response = save_model_config(payload)
+            except Exception as exc:
+                status, response = 500, {"error": str(exc)}
+        elif self.path == "/api/providers/test":
+            try:
+                status, response = test_provider_config()
+            except Exception as exc:
+                status, response = 500, {"error": str(exc)}
+        elif self.path == "/api/models/install":
+            try:
+                status, response = install_local_model(payload.get("model"))
             except Exception as exc:
                 status, response = 500, {"error": str(exc)}
         elif self.path == "/api/paperless/prompt":
