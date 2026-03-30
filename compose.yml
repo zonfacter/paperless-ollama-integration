@@ -296,6 +296,31 @@ services:
     networks:
       - paperless-ai
 
+  open-webui:
+    profiles: ["chat-ui"]
+    image: ghcr.io/open-webui/open-webui:v0.8.6
+    container_name: paperless-open-webui
+    restart: unless-stopped
+    cpus: "${OPEN_WEBUI_CPUS:-2.00}"
+    mem_limit: "${OPEN_WEBUI_MEM_LIMIT:-2g}"
+    depends_on:
+      ollama:
+        condition: service_healthy
+    environment:
+      WEBUI_URL: ${OPEN_WEBUI_URL:-http://localhost:8081}
+      WEBUI_SECRET_KEY: ${OPEN_WEBUI_SECRET_KEY:-CHANGE_ME_OPEN_WEBUI_SECRET}
+      ENABLE_OLLAMA_API: ${OPEN_WEBUI_ENABLE_OLLAMA_API:-true}
+      OLLAMA_BASE_URL: ${OPEN_WEBUI_OLLAMA_BASE_URL:-http://ollama:11434}
+      ENABLE_OPENAI_API: ${OPEN_WEBUI_ENABLE_OPENAI_API:-false}
+      OPENAI_API_BASE_URL: ${OPEN_WEBUI_OPENAI_API_BASE_URL:-http://llama-cpp:8080/v1}
+      OPENAI_API_KEY: ${OPEN_WEBUI_OPENAI_API_KEY:-}
+    ports:
+      - "${OPEN_WEBUI_BIND_HOST:-0.0.0.0}:${OPEN_WEBUI_PUBLIC_PORT:-8081}:8080"
+    volumes:
+      - ./data/open-webui:/app/backend/data
+    networks:
+      - paperless-ai
+
   paddleocr-api:
     profiles: ["ocr-extra"]
     build:

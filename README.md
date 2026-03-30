@@ -54,6 +54,7 @@ Fuer den NAS-Pfad gilt zusaetzlich:
 - `qwen3.5:2b` ist auf der Iris Xe ein brauchbarer GPU-Kandidat fuer schnelle Vorschlaege
 - `qwen3.5:4b` bleibt auf CPU der beste praktikable Qualitaetskompromiss
 - ein separater `llama.cpp`-Pfad mit kompatiblen externen GGUFs ist auf dem NAS erfolgreich verifiziert
+- `Open WebUI` kann als optionaler Chat-/Vergleichsdienst neben `paperless-ai-web` betrieben werden
 - Details dazu stehen in [docs/NAS_RUNTIME_FINDINGS.md](docs/NAS_RUNTIME_FINDINGS.md)
 
 ## Projektinhalt
@@ -87,6 +88,7 @@ Fuer den NAS-Pfad gilt zusaetzlich:
 - `docs/`
   - Installations-, Betriebs- und Sicherheitsdokumentation
   - NAS-Runtime-Befunde und Modellvergleiche in [docs/NAS_RUNTIME_FINDINGS.md](docs/NAS_RUNTIME_FINDINGS.md)
+  - optionale `Open WebUI`-Integration in [docs/OPEN_WEBUI.md](docs/OPEN_WEBUI.md)
 - `docker/paddleocr-api/`
   - optionaler `PaddleOCR`-API-Container fuer OCR-Experimente und spaetere Integration
 - `scripts/install-paddleocr-api.sh`

@@ -64,6 +64,7 @@ NAS
     +-- tika
     +-- ollama
     +-- paperless-ai-web (:3000)
+    +-- open-webui (:8081, optional)
     +-- paddleocr-api (:8091, optional)
 ```
 
@@ -135,6 +136,20 @@ Begruendung:
   - Task Manager
   - Backfill-Steuerung
 
+### 3b. Optionaler Chat-Layer
+
+- `open-webui`
+- Port `8081`
+- Aufgabe:
+  - direkter Modellchat
+  - manueller Modellvergleich
+  - spaeter optionaler Zugriff auf `llama.cpp` als OpenAI-kompatiblen Provider
+
+Wichtig:
+
+- `open-webui` ersetzt nicht `paperless-ai-web`
+- Review, Regelverwaltung, Backfill und Task Manager bleiben im Projekt bewusst getrennt
+
 ### 4. OCR-Zusatz
 
 - `paddleocr-api` optional
@@ -150,6 +165,7 @@ Begruendung:
 - `paperless-ngx` selbst
 - `ollama`
 - `paperless-ai-web`
+- `open-webui`
 - `paddleocr-api`
 
 ### Nicht in den Container-Images fest verdrahten
@@ -186,6 +202,8 @@ Im NAS-Zielbild sollte die linke Navigation mindestens diese Bereiche haben:
 - `OCR`
 - `Steuerung`
 - `Chat`
+- optional zusaetzlich klar getrennt:
+  - `Open WebUI`
 
 ### Bereich `Modelle`
 
@@ -209,6 +227,11 @@ Dort muss spaeter moeglich sein:
 - alternative KI-Docker-Dienste eintragen
 - Healthcheck / Verbindungstest ausfuehren
 - zwischen Providern umschalten
+
+Fuer den optionalen Chat-Layer sollte zusaetzlich moeglich sein:
+
+- `Open WebUI` gegen lokales `ollama` betreiben
+- `Open WebUI` spaeter gegen `llama.cpp` als OpenAI-kompatiblen Dienst richten
 
 ### Bereich `System / Updates`
 

@@ -7,6 +7,7 @@ Diese Datei beschreibt den ersten sauberen NAS-Start fuer den Docker-MVP:
 - `paperless-ngx`
 - `ollama`
 - `paperless-ai-web` als naechste Stufe ueber Compose-Profil `ui`
+- optional `open-webui` als Chat-/Vergleichsdienst ueber Compose-Profil `chat-ui`
 - optional spaeter `paddleocr-api`
 
 Ergaenzende reale Laufzeitbefunde fuer dieses NAS stehen in:
@@ -53,6 +54,7 @@ mkdir -p \
   data/db \
   data/ollama \
   data/paperless-ai-web \
+  data/open-webui \
   data/paddleocr-cache \
   config/tessdata-best
 ```
@@ -108,6 +110,8 @@ OLLAMA_CPUS=6.00
 OLLAMA_MEM_LIMIT=12g
 PAPERLESS_AI_WEB_CPUS=1.00
 PAPERLESS_AI_WEB_MEM_LIMIT=1g
+OPEN_WEBUI_CPUS=2.00
+OPEN_WEBUI_MEM_LIMIT=2g
 PADDLEOCR_CPUS=2.00
 PADDLEOCR_MEM_LIMIT=2g
 ```
@@ -197,6 +201,30 @@ Dann pruefen:
 ```bash
 curl -sS http://127.0.0.1:3000/ | head
 ```
+
+## Optional: Open WebUI
+
+Wenn zusaetzlich ein separater Chat-/Vergleichsdienst fuer lokale Modelle gewuenscht ist:
+
+```bash
+sudo docker compose --profile chat-ui up -d open-webui
+```
+
+Dann pruefen:
+
+```bash
+curl -sS http://127.0.0.1:8081/ | head
+```
+
+Wichtige Einordnung:
+
+- `Open WebUI` ersetzt nicht `paperless-ai-web`
+- `paperless-ai-web` bleibt fuer Review, Task Manager und Backfill zustaendig
+- `Open WebUI` ist fuer Chat, Modellvergleich und spaetere optionale zweite Runtime-Anbindung gedacht
+
+Siehe auch:
+
+- [OPEN_WEBUI.md](OPEN_WEBUI.md)
 
 ## Optionaler OCR-Zusatz
 
