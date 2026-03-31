@@ -312,9 +312,9 @@ services:
       WEBUI_SECRET_KEY: ${OPEN_WEBUI_SECRET_KEY:-CHANGE_ME_OPEN_WEBUI_SECRET}
       ENABLE_OLLAMA_API: ${OPEN_WEBUI_ENABLE_OLLAMA_API:-true}
       OLLAMA_BASE_URL: ${OPEN_WEBUI_OLLAMA_BASE_URL:-http://ollama:11434}
-      ENABLE_OPENAI_API: ${OPEN_WEBUI_ENABLE_OPENAI_API:-false}
+      ENABLE_OPENAI_API: ${OPEN_WEBUI_ENABLE_OPENAI_API:-true}
       OPENAI_API_BASE_URL: ${OPEN_WEBUI_OPENAI_API_BASE_URL:-http://llama-cpp:8080/v1}
-      OPENAI_API_KEY: ${OPEN_WEBUI_OPENAI_API_KEY:-}
+      OPENAI_API_KEY: ${OPEN_WEBUI_OPENAI_API_KEY:-dummy}
     ports:
       - "${OPEN_WEBUI_BIND_HOST:-0.0.0.0}:${OPEN_WEBUI_PUBLIC_PORT:-8081}:8080"
     volumes:
@@ -342,6 +342,31 @@ services:
       - "${PADDLEOCR_BIND_HOST:-127.0.0.1}:${PADDLEOCR_PUBLIC_PORT:-8091}:8091"
     volumes:
       - ./data/paddleocr-cache:/root/.paddlex
+    devices:
+      - /dev/dri:/dev/dri
+    networks:
+      - paperless-ai
+
+  llama-cpp:
+    profiles: ["llama-cpp"]
+    build:
+      context: ./docker/llama-cpp
+      dockerfile: Dockerfile
+    container_name: paperless-llama-cpp
+    restart: unless-stopped
+    cpus: "${LLAMA_CPP_CPUS:-6.00}"
+    mem_limit: "${LLAMA_CPP_MEM_LIMIT:-8g}"
+    command: >
+      /src/build/bin/llama-server
+      -m /models/${LLAMA_CPP_MODEL:-Qwen3.5-4B-Q4_K_M.gguf}
+      --host 0.0.0.0
+      --port 8080
+      --n-gpu-layers ${LLAMA_CPP_GPU_LAYERS:-99}
+      --ctx-size ${LLAMA_CPP_CTX_SIZE:-4096}
+      --threads ${LLAMA_CPP_THREADS:-4}
+      --log-prefix
+    volumes:
+      - ${LLAMA_CPP_MODELS_PATH:-/volume1/docker/llama-cpp-test/models}:/models:ro
     devices:
       - /dev/dri:/dev/dri
     networks:
