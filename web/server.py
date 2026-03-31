@@ -1236,9 +1236,29 @@ HTML = """<!doctype html>
                 </div>
                 <div class="config-grid">
                   <div class="field">
+                    <label for="paperless-provider">Laufzeit fuer Primaermodell</label>
+                    <select id="paperless-provider">
+                      <option value="ollama_local">GPU lokal ueber Ollama</option>
+                      <option value="openai_local">CPU lokal ueber llama.cpp/OpenAI</option>
+                      <option value="ollama_remote">GPU remote ueber Ollama</option>
+                      <option value="openai_remote">CPU remote ueber OpenAI-kompatibel</option>
+                    </select>
+                    <small>Hier legst du fest, ob das Hauptmodell ueber den GPU- oder CPU-Pfad laufen soll.</small>
+                  </div>
+                  <div class="field">
                     <label for="paperless-model">Primärmodell</label>
                     <select id="paperless-model"></select>
                     <small>Dieses Modell nutzt der eigentliche Paperless-Import für neue Dokumente und Backfills.</small>
+                  </div>
+                  <div class="field">
+                    <label for="paperless-fallback-provider">Laufzeit fuer Fallback</label>
+                    <select id="paperless-fallback-provider">
+                      <option value="ollama_local">GPU lokal ueber Ollama</option>
+                      <option value="openai_local">CPU lokal ueber llama.cpp/OpenAI</option>
+                      <option value="ollama_remote">GPU remote ueber Ollama</option>
+                      <option value="openai_remote">CPU remote ueber OpenAI-kompatibel</option>
+                    </select>
+                    <small>Der Fallback kann bewusst auf einen stabileren CPU-Pfad gelegt werden.</small>
                   </div>
                   <div class="field">
                     <label for="paperless-fallback-model">Fallback-Modell</label>
@@ -1305,6 +1325,16 @@ HTML = """<!doctype html>
                       <input id="cfg-tag-color" type="text" placeholder="#4f6bed">
                     </div>
                     <small>Diese Farbe wird für neu von der KI angelegte Tags genutzt, wenn noch kein Tag vorhanden ist.</small>
+                  </div>
+                  <div class="field">
+                    <label for="cfg-tag-review-provider">Tag-Review-Laufzeit</label>
+                    <select id="cfg-tag-review-provider">
+                      <option value="ollama_local">GPU lokal ueber Ollama</option>
+                      <option value="openai_local">CPU lokal ueber llama.cpp/OpenAI</option>
+                      <option value="ollama_remote">GPU remote ueber Ollama</option>
+                      <option value="openai_remote">CPU remote ueber OpenAI-kompatibel</option>
+                    </select>
+                    <small>Tag-Review darf gezielt auf einen stabileren CPU-Pfad gelegt werden.</small>
                   </div>
                   <div class="field">
                     <label for="cfg-tag-review-model">Tag-Review-Modell</label>
@@ -1400,9 +1430,27 @@ HTML = """<!doctype html>
                     <small>Begrenzt die zweite OCR-Quelle auf kurze PDFs. Laengere Dokumente bleiben bei Paperless OCR.</small>
                   </div>
                   <div class="field">
+                    <label for="preview-ocr-provider">Vorschau-Laufzeit</label>
+                    <select id="preview-ocr-provider">
+                      <option value="ollama_local">GPU lokal ueber Ollama</option>
+                      <option value="openai_local">CPU lokal ueber llama.cpp/OpenAI</option>
+                      <option value="ollama_remote">GPU remote ueber Ollama</option>
+                      <option value="openai_remote">CPU remote ueber OpenAI-kompatibel</option>
+                    </select>
+                    <small>Damit kann die Vorschau zwischen schnellem GPU- und stabilem CPU-Pfad wechseln.</small>
+                  </div>
+                  <div class="field">
                     <label for="preview-ocr-model">Vorschau-OCR-Modell</label>
                     <select id="preview-ocr-model"></select>
                     <small>Dieses Modell erzeugt den ersten Vorschlag in der Review-Ansicht. Kleiner ist schneller, groesser meist genauer.</small>
+                  </div>
+                  <div class="field">
+                    <label for="preview-vision-provider">Vision-Laufzeit</label>
+                    <select id="preview-vision-provider">
+                      <option value="ollama_local">GPU lokal ueber Ollama</option>
+                      <option value="ollama_remote">GPU remote ueber Ollama</option>
+                    </select>
+                    <small>Bildbasierte Vision bleibt aktuell auf dem Ollama-Pfad, weil dort Bild-Requests bereits sauber angebunden sind.</small>
                   </div>
                   <div class="field">
                     <label for="preview-vision-model">Vision-Modell</label>
@@ -1557,6 +1605,7 @@ HTML = """<!doctype html>
                   </div>
                   <div class="summary-bar">
                     <span class="pill">ollama local</span>
+                    <span class="pill">openai kompatibel</span>
                     <span class="pill">ollama remote</span>
                     <span class="pill">OCR API</span>
                   </div>
@@ -1569,7 +1618,7 @@ HTML = """<!doctype html>
                   <div class="flow-arrow">→</div>
                   <div id="provider-diagram-ollama" class="flow-node">
                     <strong>LLM-Pfad</strong>
-                    <span>Lokales oder externes `ollama` fuer Titel, Typ, Tags und Chat.</span>
+                    <span>`ollama` fuer GPU-Modelle oder `llama.cpp`/OpenAI-kompatibel fuer CPU-Modelle.</span>
                   </div>
                   <div class="flow-arrow">→</div>
                   <div id="provider-diagram-ocr" class="flow-node">
@@ -1601,6 +1650,11 @@ HTML = """<!doctype html>
                         <small>Native VM oder spaeter lokaler Docker-Dienst.</small>
                       </div>
                       <div class="field">
+                        <label for="provider-local-openai-compatible-url">Lokale OpenAI-kompatible URL</label>
+                        <input id="provider-local-openai-compatible-url" type="text" placeholder="http://127.0.0.1:18080/v1">
+                        <small>Zum Beispiel `llama.cpp` auf CPU fuer groessere und stabile Modelle.</small>
+                      </div>
+                      <div class="field">
                         <label for="provider-active-ocr">Aktiver OCR-Zusatzpfad</label>
                         <select id="provider-active-ocr">
                           <option value="local">Lokal</option>
@@ -1628,6 +1682,11 @@ HTML = """<!doctype html>
                         <label for="provider-remote-ollama-url">Externe Ollama-URL</label>
                         <input id="provider-remote-ollama-url" type="text" placeholder="http://nas-host:11434">
                         <small>Fuer spaetere NAS- oder andere Docker-Hosts im LAN.</small>
+                      </div>
+                      <div class="field">
+                        <label for="provider-remote-openai-compatible-url">Externe OpenAI-kompatible URL</label>
+                        <input id="provider-remote-openai-compatible-url" type="text" placeholder="http://nas-host:18080/v1">
+                        <small>Zum Beispiel ein separater `llama.cpp`-Host oder anderer OpenAI-kompatibler Dienst.</small>
                       </div>
                       <div class="field">
                         <label for="provider-remote-ocr-url">Externe OCR-API URL</label>
@@ -1689,7 +1748,9 @@ HTML = """<!doctype html>
     const statusEl = document.getElementById('status');
     const sendBtn = document.getElementById('send');
     const clearBtn = document.getElementById('clear');
+    const paperlessProviderEl = document.getElementById('paperless-provider');
     const paperlessModelEl = document.getElementById('paperless-model');
+    const paperlessFallbackProviderEl = document.getElementById('paperless-fallback-provider');
     const paperlessFallbackModelEl = document.getElementById('paperless-fallback-model');
     const paperlessFallbackEnabledEl = document.getElementById('paperless-fallback-enabled');
     const paperlessFallbackTimeoutOnlyEl = document.getElementById('paperless-fallback-timeout-only');
@@ -1701,6 +1762,7 @@ HTML = """<!doctype html>
     const cfgTimeoutEl = document.getElementById('cfg-timeout');
     const cfgTagColorEl = document.getElementById('cfg-tag-color');
     const cfgTagColorPickerEl = document.getElementById('cfg-tag-color-picker');
+    const cfgTagReviewProviderEl = document.getElementById('cfg-tag-review-provider');
     const cfgTagReviewModelEl = document.getElementById('cfg-tag-review-model');
     const cfgTagReviewTimeoutEl = document.getElementById('cfg-tag-review-timeout');
     const cfgTagRulesForceEl = document.getElementById('cfg-tag-rules-force');
@@ -1718,7 +1780,9 @@ HTML = """<!doctype html>
     const previewPaddleApiUrlEl = document.getElementById('preview-paddleocr-api-url');
     const previewPaddleTimeoutEl = document.getElementById('preview-paddleocr-timeout');
     const previewPaddleMaxPagesEl = document.getElementById('preview-paddleocr-max-pages');
+    const previewOcrProviderEl = document.getElementById('preview-ocr-provider');
     const previewVisionModelEl = document.getElementById('preview-vision-model');
+    const previewVisionProviderEl = document.getElementById('preview-vision-provider');
     const previewVisionContentCharsEl = document.getElementById('preview-vision-content-chars');
     const previewVisionTimeoutEl = document.getElementById('preview-vision-timeout');
     const previewVisionMaxPagesEl = document.getElementById('preview-vision-max-pages');
@@ -1785,6 +1849,8 @@ HTML = """<!doctype html>
     const providerActiveOllamaEl = document.getElementById('provider-active-ollama');
     const providerLocalOllamaUrlEl = document.getElementById('provider-local-ollama-url');
     const providerRemoteOllamaUrlEl = document.getElementById('provider-remote-ollama-url');
+    const providerLocalOpenAiCompatibleUrlEl = document.getElementById('provider-local-openai-compatible-url');
+    const providerRemoteOpenAiCompatibleUrlEl = document.getElementById('provider-remote-openai-compatible-url');
     const providerActiveOcrEl = document.getElementById('provider-active-ocr');
     const providerLocalOcrUrlEl = document.getElementById('provider-local-ocr-url');
     const providerRemoteOcrUrlEl = document.getElementById('provider-remote-ocr-url');
@@ -2257,8 +2323,10 @@ HTML = """<!doctype html>
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
+            provider: paperlessProviderEl.value,
             primary_model: model,
             fallback_enabled: paperlessFallbackEnabledEl.checked ? 'true' : 'false',
+            fallback_provider: paperlessFallbackProviderEl.value,
             fallback_model: paperlessFallbackModelEl.value,
             fallback_timeout_only: paperlessFallbackTimeoutOnlyEl.checked ? 'true' : 'false',
             fallback_http_timeout_seconds: paperlessFallbackTimeoutEl.value.trim()
@@ -2266,7 +2334,7 @@ HTML = """<!doctype html>
         });
         const data = await res.json();
         if (!res.ok) throw new Error(data.error || 'Fehler');
-        paperlessModelStatusEl.textContent = `Aktiv: ${model}${paperlessFallbackEnabledEl.checked ? ` mit Fallback ${paperlessFallbackModelEl.value}` : ''}`;
+        paperlessModelStatusEl.textContent = `Aktiv: ${paperlessProviderEl.value} / ${model}${paperlessFallbackEnabledEl.checked ? ` mit Fallback ${paperlessFallbackProviderEl.value} / ${paperlessFallbackModelEl.value}` : ''}`;
       } catch (err) {
         paperlessModelStatusEl.textContent = `Fehler: ${err.message}`;
         paperlessModelStatusEl.className = 'statusline warn';
@@ -2286,9 +2354,11 @@ HTML = """<!doctype html>
         cfgMinConfidenceEl.value = data.min_confidence || '';
         cfgTimeoutEl.value = data.http_timeout_seconds || '';
         cfgTagColorControl.set(data.default_tag_color || '');
+        paperlessProviderEl.value = data.provider || 'ollama_local';
         if (data.tag_review_model && availableModelNames.includes(data.tag_review_model)) {
           cfgTagReviewModelEl.value = data.tag_review_model;
         }
+        cfgTagReviewProviderEl.value = data.tag_review_provider || data.provider || 'ollama_local';
         cfgTagReviewTimeoutEl.value = data.tag_review_timeout_seconds || '';
         cfgTagRulesForceEl.value = data.tag_rules_force || 'false';
         cfgReviewMinConfidenceEl.value = data.review_min_confidence || '';
@@ -2302,6 +2372,7 @@ HTML = """<!doctype html>
         if (data.fallback_model) {
           paperlessFallbackModelEl.value = data.fallback_model;
         }
+        paperlessFallbackProviderEl.value = data.fallback_provider || data.provider || 'ollama_local';
         paperlessFallbackEnabledEl.checked = String(data.fallback_enabled || '').toLowerCase() === 'true';
         paperlessFallbackTimeoutOnlyEl.checked = String(data.fallback_timeout_only || '').toLowerCase() !== 'false';
         paperlessFallbackTimeoutEl.value = data.fallback_http_timeout_seconds || data.http_timeout_seconds || '';
@@ -2327,6 +2398,9 @@ HTML = """<!doctype html>
             min_confidence: cfgMinConfidenceEl.value.trim(),
             http_timeout_seconds: cfgTimeoutEl.value.trim(),
             default_tag_color: cfgTagColorEl.value.trim(),
+            provider: paperlessProviderEl.value,
+            fallback_provider: paperlessFallbackProviderEl.value,
+            tag_review_provider: cfgTagReviewProviderEl.value,
             tag_review_model: cfgTagReviewModelEl.value,
             tag_review_timeout_seconds: cfgTagReviewTimeoutEl.value.trim(),
             tag_rules_force: cfgTagRulesForceEl.value,
@@ -2358,6 +2432,7 @@ HTML = """<!doctype html>
         if (data.preview_ocr_model && availableModelNames.includes(data.preview_ocr_model)) {
           previewOcrModelEl.value = data.preview_ocr_model;
         }
+        previewOcrProviderEl.value = data.preview_ocr_provider || 'ollama_local';
         previewOcrSourceEl.value = data.ocr_source || 'paperless';
         previewPaddleApiUrlEl.value = data.paddleocr_api_url || '';
         previewPaddleTimeoutEl.value = data.paddleocr_timeout_seconds || '';
@@ -2365,6 +2440,7 @@ HTML = """<!doctype html>
         if (data.vision_model && availableModelNames.includes(data.vision_model)) {
           previewVisionModelEl.value = data.vision_model;
         }
+        previewVisionProviderEl.value = data.vision_provider || 'ollama_local';
         previewVisionContentCharsEl.value = data.vision_content_chars || '';
         previewVisionTimeoutEl.value = data.vision_timeout_seconds || '';
         previewVisionMaxPagesEl.value = data.vision_max_pages || '';
@@ -2460,6 +2536,8 @@ HTML = """<!doctype html>
         providerActiveOllamaEl.value = data.active_ollama_provider || 'local';
         providerLocalOllamaUrlEl.value = data.local_ollama_url || '';
         providerRemoteOllamaUrlEl.value = data.remote_ollama_url || '';
+        providerLocalOpenAiCompatibleUrlEl.value = data.local_openai_compatible_url || '';
+        providerRemoteOpenAiCompatibleUrlEl.value = data.remote_openai_compatible_url || '';
         providerActiveOcrEl.value = data.active_ocr_provider || 'local';
         providerLocalOcrUrlEl.value = data.local_ocr_url || '';
         providerRemoteOcrUrlEl.value = data.remote_ocr_url || '';
@@ -2496,6 +2574,8 @@ HTML = """<!doctype html>
             active_ollama_provider: providerActiveOllamaEl.value,
             local_ollama_url: providerLocalOllamaUrlEl.value.trim(),
             remote_ollama_url: providerRemoteOllamaUrlEl.value.trim(),
+            local_openai_compatible_url: providerLocalOpenAiCompatibleUrlEl.value.trim(),
+            remote_openai_compatible_url: providerRemoteOpenAiCompatibleUrlEl.value.trim(),
             active_ocr_provider: providerActiveOcrEl.value,
             local_ocr_url: providerLocalOcrUrlEl.value.trim(),
             remote_ocr_url: providerRemoteOcrUrlEl.value.trim()
@@ -2545,7 +2625,9 @@ HTML = """<!doctype html>
             paddleocr_api_url: previewPaddleApiUrlEl.value.trim(),
             paddleocr_timeout_seconds: previewPaddleTimeoutEl.value.trim(),
             paddleocr_max_pages: previewPaddleMaxPagesEl.value.trim(),
+            preview_ocr_provider: previewOcrProviderEl.value,
             preview_ocr_model: previewOcrModelEl.value,
+            vision_provider: previewVisionProviderEl.value,
             vision_model: previewVisionModelEl.value,
             vision_content_chars: previewVisionContentCharsEl.value.trim(),
             vision_timeout_seconds: previewVisionTimeoutEl.value.trim(),
@@ -3166,14 +3248,41 @@ def ollama_preview_num_ctx() -> int:
     )
 
 
+def normalize_runtime_provider(value: str | None, default: str = "ollama_local") -> str:
+    raw = str(value or "").strip().lower()
+    if not raw:
+        return default
+    aliases = {
+        "ollama": "ollama_local",
+        "openai": "openai_local",
+        "llama_cpp_local": "openai_local",
+        "llama_cpp_remote": "openai_remote",
+    }
+    normalized = aliases.get(raw, raw)
+    if normalized in {"ollama_local", "ollama_remote", "openai_local", "openai_remote"}:
+        return normalized
+    return default
+
+
+def runtime_provider_kind(value: str | None) -> str:
+    normalized = normalize_runtime_provider(value)
+    if normalized.startswith("ollama_"):
+        return "ollama"
+    if normalized.startswith("openai_"):
+        return "openai"
+    raise RuntimeError(f"Unsupported provider value: {value}")
+
+
 def default_preview_config() -> dict[str, str]:
     default_local_ocr_url = os.getenv("PAPERLESS_PROVIDER_LOCAL_OCR_URL", "http://127.0.0.1:8091")
     return {
+        "preview_ocr_provider": os.getenv("PAPERLESS_PREVIEW_OCR_PROVIDER", "ollama_local"),
         "preview_ocr_model": os.getenv("PAPERLESS_PREVIEW_OCR_MODEL", "qwen3.5:4b"),
         "ocr_source": os.getenv("PAPERLESS_PREVIEW_OCR_SOURCE", "paperless"),
         "paddleocr_api_url": os.getenv("PAPERLESS_PREVIEW_PADDLEOCR_API_URL", default_local_ocr_url),
         "paddleocr_timeout_seconds": os.getenv("PAPERLESS_PREVIEW_PADDLEOCR_TIMEOUT_SECONDS", "90"),
         "paddleocr_max_pages": os.getenv("PAPERLESS_PREVIEW_PADDLEOCR_MAX_PAGES", "1"),
+        "vision_provider": os.getenv("PAPERLESS_PREVIEW_VISION_PROVIDER", "ollama_local"),
         "vision_model": os.getenv("PAPERLESS_PREVIEW_VISION_MODEL", "qwen3.5:0.8b"),
         "vision_content_chars": os.getenv("PAPERLESS_PREVIEW_VISION_CONTENT_CHARS", "800"),
         "vision_timeout_seconds": os.getenv("PAPERLESS_PREVIEW_VISION_TIMEOUT_SECONDS", "120"),
@@ -3189,6 +3298,8 @@ def default_provider_config() -> dict[str, str]:
         "active_ollama_provider": "local",
         "local_ollama_url": OLLAMA_URL,
         "remote_ollama_url": "",
+        "local_openai_compatible_url": os.getenv("PAPERLESS_PROVIDER_LOCAL_OPENAI_COMPATIBLE_URL", "http://127.0.0.1:18080/v1"),
+        "remote_openai_compatible_url": "",
         "active_ocr_provider": "local",
         "local_ocr_url": default_local_ocr_url,
         "remote_ocr_url": "",
@@ -3229,14 +3340,20 @@ def default_model_config() -> dict[str, object]:
         "library_json": json.dumps(
             [
                 {
-                    "name": "qwen3.5:9b",
-                    "role": "paperless_primary",
+                    "name": "qwen3.5:2b",
+                    "role": "preview_gpu",
                     "provider": "ollama_local",
-                    "homepage": "https://ollama.com/library/qwen3.5:9b",
+                    "homepage": "https://ollama.com/library/qwen3.5:2b",
+                },
+                {
+                    "name": "Qwen3.5-4B-Q4_K_M",
+                    "role": "paperless_primary_cpu",
+                    "provider": "openai_local",
+                    "homepage": "https://huggingface.co/unsloth/Qwen3.5-4B-GGUF",
                 },
                 {
                     "name": "qwen3.5:0.8b",
-                    "role": "paperless_fallback",
+                    "role": "vision_gpu",
                     "provider": "ollama_local",
                     "homepage": "https://ollama.com/library/qwen3.5:0.8b",
                 },
@@ -3260,6 +3377,25 @@ def load_model_config() -> dict[str, object]:
             if library_json is not None and str(library_json).strip():
                 config["library_json"] = str(library_json)
     return config
+
+
+def parse_model_library_entries() -> list[dict[str, object]]:
+    config = load_model_config()
+    raw_library = str(config.get("library_json", "") or "").strip()
+    if not raw_library:
+        return []
+    try:
+        parsed = json.loads(raw_library)
+    except json.JSONDecodeError:
+        return []
+    if isinstance(parsed, dict):
+        library = parsed.get("library", [])
+        if isinstance(library, list):
+            return [item for item in library if isinstance(item, dict)]
+        return []
+    if isinstance(parsed, list):
+        return [item for item in parsed if isinstance(item, dict)]
+    return []
 
 
 def save_model_config(payload: dict) -> tuple[int, dict]:
@@ -3370,9 +3506,15 @@ def read_paperless_config() -> tuple[int, dict]:
                 ensure_ascii=False,
                 indent=2,
             )
+    active_provider = normalize_runtime_provider(env_map.get("PAPERLESS_AI_PROVIDER", "ollama_local"))
+    tag_provider = normalize_runtime_provider(env_map.get("PAPERLESS_AI_TAG_PROVIDER", active_provider))
+    fallback_provider = normalize_runtime_provider(env_map.get("PAPERLESS_AI_FALLBACK_PROVIDER", active_provider))
+    primary_model = env_map.get("PAPERLESS_AI_OLLAMA_MODEL", "") or env_map.get("PAPERLESS_AI_OPENAI_MODEL", "")
     return 200, {
-        "model": env_map.get("PAPERLESS_AI_OLLAMA_MODEL", ""),
+        "provider": active_provider,
+        "model": primary_model,
         "fallback_enabled": env_map.get("PAPERLESS_AI_FALLBACK_ENABLED", "false"),
+        "fallback_provider": fallback_provider,
         "fallback_model": env_map.get("PAPERLESS_AI_FALLBACK_MODEL", ""),
         "fallback_timeout_only": env_map.get("PAPERLESS_AI_FALLBACK_ON_TIMEOUT_ONLY", "true"),
         "fallback_http_timeout_seconds": env_map.get("PAPERLESS_AI_FALLBACK_HTTP_TIMEOUT_SECONDS", ""),
@@ -3380,6 +3522,7 @@ def read_paperless_config() -> tuple[int, dict]:
         "min_confidence": env_map.get("PAPERLESS_AI_MIN_CONFIDENCE", ""),
         "http_timeout_seconds": env_map.get("PAPERLESS_AI_HTTP_TIMEOUT_SECONDS", ""),
         "default_tag_color": env_map.get("PAPERLESS_AI_DEFAULT_TAG_COLOR", ""),
+        "tag_review_provider": tag_provider,
         "tag_review_model": env_map.get("PAPERLESS_AI_TAG_OLLAMA_MODEL", ""),
         "tag_review_timeout_seconds": env_map.get("PAPERLESS_AI_TAG_HTTP_TIMEOUT_SECONDS", ""),
         "tag_rules_force": env_map.get("PAPERLESS_AI_TAG_RULES_FORCE", "false"),
@@ -3422,9 +3565,28 @@ def test_provider_config() -> tuple[int, dict]:
     return 200, {
         "local_ollama": provider_healthcheck(config.get("local_ollama_url", ""), "/api/tags"),
         "remote_ollama": provider_healthcheck(config.get("remote_ollama_url", ""), "/api/tags"),
+        "local_openai_compatible": provider_healthcheck(config.get("local_openai_compatible_url", ""), "/models"),
+        "remote_openai_compatible": provider_healthcheck(config.get("remote_openai_compatible_url", ""), "/models"),
         "local_ocr": provider_healthcheck(config.get("local_ocr_url", ""), "/healthz"),
         "remote_ocr": provider_healthcheck(config.get("remote_ocr_url", ""), "/healthz"),
     }
+
+
+def sync_provider_urls_to_paperless_env() -> tuple[int, dict]:
+    provider_config = load_provider_config()
+    mappings = {
+        "PAPERLESS_AI_PROVIDER_OLLAMA_LOCAL_URL": provider_config.get("local_ollama_url", "").strip(),
+        "PAPERLESS_AI_PROVIDER_OLLAMA_REMOTE_URL": provider_config.get("remote_ollama_url", "").strip(),
+        "PAPERLESS_AI_PROVIDER_OPENAI_LOCAL_URL": provider_config.get("local_openai_compatible_url", "").strip(),
+        "PAPERLESS_AI_PROVIDER_OPENAI_REMOTE_URL": provider_config.get("remote_openai_compatible_url", "").strip(),
+    }
+    for key, value in mappings.items():
+        if not value:
+            continue
+        status, response = call_ai_helper(["set-config", key, value])
+        if status != 200:
+            return status, response
+    return 200, {"status": "ok"}
 
 
 def install_local_model(model_name: str) -> tuple[int, dict]:
@@ -3474,8 +3636,10 @@ def save_paperless_prompt(prompt: str) -> tuple[int, dict]:
 
 def save_paperless_config(payload: dict) -> tuple[int, dict]:
     allowed = {
+        "provider": "PAPERLESS_AI_PROVIDER",
         "primary_model": "PAPERLESS_AI_OLLAMA_MODEL",
         "fallback_enabled": "PAPERLESS_AI_FALLBACK_ENABLED",
+        "fallback_provider": "PAPERLESS_AI_FALLBACK_PROVIDER",
         "fallback_model": "PAPERLESS_AI_FALLBACK_MODEL",
         "fallback_timeout_only": "PAPERLESS_AI_FALLBACK_ON_TIMEOUT_ONLY",
         "fallback_http_timeout_seconds": "PAPERLESS_AI_FALLBACK_HTTP_TIMEOUT_SECONDS",
@@ -3483,6 +3647,7 @@ def save_paperless_config(payload: dict) -> tuple[int, dict]:
         "min_confidence": "PAPERLESS_AI_MIN_CONFIDENCE",
         "http_timeout_seconds": "PAPERLESS_AI_HTTP_TIMEOUT_SECONDS",
         "default_tag_color": "PAPERLESS_AI_DEFAULT_TAG_COLOR",
+        "tag_review_provider": "PAPERLESS_AI_TAG_PROVIDER",
         "tag_review_model": "PAPERLESS_AI_TAG_OLLAMA_MODEL",
         "tag_review_timeout_seconds": "PAPERLESS_AI_TAG_HTTP_TIMEOUT_SECONDS",
         "tag_rules_force": "PAPERLESS_AI_TAG_RULES_FORCE",
@@ -3521,6 +3686,9 @@ def save_paperless_config(payload: dict) -> tuple[int, dict]:
         status, response = call_ai_helper(["set-config", "PAPERLESS_AI_TAG_RULES_B64", encoded])
         if status != 200:
             return status, response
+    status, response = sync_provider_urls_to_paperless_env()
+    if status != 200:
+        return status, response
     status, response = call_ai_helper(["restart-workers"])
     if status != 200:
         return status, response
@@ -4392,6 +4560,7 @@ def run_hybrid_vision_review(job_id: str, document: dict, proposal: dict, existi
             image_payloads=image_payloads,
             model=preview_config.get("vision_model", "qwen3.5:0.8b"),
             timeout=float(preview_config.get("vision_timeout_seconds", "120")),
+            provider=preview_config.get("vision_provider", "ollama_local"),
         )
         vision_proposal = module.refine_result(module.sanitize_result(vision_raw), document)
         merged = merge_hybrid_proposals(proposal, vision_proposal)
@@ -4430,8 +4599,8 @@ def load_ai_hook_module():
     return module
 
 
-def call_ollama_preview(module, prompt: str, image_payloads: list[str] | None, model: str, timeout: float) -> dict:
-    host = module.env("PAPERLESS_AI_OLLAMA_URL", "http://127.0.0.1:11434")
+def call_ollama_preview(module, prompt: str, image_payloads: list[str] | None, model: str, timeout: float, provider_id: str) -> dict:
+    host = module.provider_ollama_url(provider_id)
     client = module.HttpClient(host)
     user_message: dict[str, object] = {"role": "user", "content": prompt}
     if image_payloads:
@@ -4461,25 +4630,46 @@ def call_ollama_preview(module, prompt: str, image_payloads: list[str] | None, m
     return module.parse_json_object(content)
 
 
-def get_preview_response_details(module, prompt: str, image_payloads: list[str] | None = None, model: str | None = None, timeout: float | None = None) -> tuple[dict, dict]:
+def call_openai_preview(module, prompt: str, model: str, provider_id: str, timeout: float) -> dict:
+    return module.call_openai(prompt, model=model, provider_id=provider_id, timeout=timeout)
+
+
+def get_preview_response_details(
+    module,
+    prompt: str,
+    image_payloads: list[str] | None = None,
+    model: str | None = None,
+    timeout: float | None = None,
+    provider: str | None = None,
+) -> tuple[dict, dict]:
+    provider_id = normalize_runtime_provider(provider or module.env("PAPERLESS_AI_PROVIDER", "ollama_local"))
     if not image_payloads:
         if model is None and timeout is None:
             return module.get_provider_response_details(prompt)
-        provider = module.env("PAPERLESS_AI_PROVIDER", "ollama").lower()
-        if provider != "ollama":
-            return module.get_provider_response_details(prompt)
+        if runtime_provider_kind(provider_id) != "ollama":
+            response, meta = module.get_provider_response_details(
+                prompt,
+                model_override=model,
+                timeout_override=timeout,
+                provider_override=provider_id,
+            )
+            return response, meta
         primary_model = model or module.env("PAPERLESS_AI_OLLAMA_MODEL", "qwen2.5:7b-instruct")
         primary_timeout = timeout if timeout is not None else float(module.env("PAPERLESS_AI_HTTP_TIMEOUT_SECONDS", "300"))
-        return call_ollama_preview(module, prompt, None, primary_model, primary_timeout), {
-            "provider": "ollama",
+        return call_ollama_preview(module, prompt, None, primary_model, primary_timeout, provider_id), {
+            "provider": provider_id,
             "model": primary_model,
             "fallback_used": False,
             "timeout_seconds": primary_timeout,
         }
-    provider = module.env("PAPERLESS_AI_PROVIDER", "ollama").lower()
-    if provider != "ollama":
-        response, meta = module.get_provider_response_details(prompt)
-        meta["vision_error"] = f"Vision preview is only implemented for Ollama, active provider is {provider}"
+    if runtime_provider_kind(provider_id) != "ollama":
+        response, meta = module.get_provider_response_details(
+            prompt,
+            model_override=model,
+            timeout_override=timeout,
+            provider_override=provider_id,
+        )
+        meta["vision_error"] = f"Vision preview is only implemented for Ollama, active provider is {provider_id}"
         return response, meta
     primary_model = model or module.env("PAPERLESS_AI_OLLAMA_MODEL", "qwen2.5:7b-instruct")
     primary_timeout = timeout if timeout is not None else float(module.env("PAPERLESS_AI_HTTP_TIMEOUT_SECONDS", "300"))
@@ -4488,8 +4678,8 @@ def get_preview_response_details(module, prompt: str, image_payloads: list[str] 
     fallback_timeout = float(module.env("PAPERLESS_AI_FALLBACK_HTTP_TIMEOUT_SECONDS", str(primary_timeout)))
     fallback_timeout_only = module.env("PAPERLESS_AI_FALLBACK_ON_TIMEOUT_ONLY", "true").lower() in ("1", "true", "yes", "on")
     try:
-        return call_ollama_preview(module, prompt, image_payloads, primary_model, primary_timeout), {
-            "provider": "ollama",
+        return call_ollama_preview(module, prompt, image_payloads, primary_model, primary_timeout, provider_id), {
+            "provider": provider_id,
             "model": primary_model,
             "fallback_used": False,
             "timeout_seconds": primary_timeout,
@@ -4500,8 +4690,8 @@ def get_preview_response_details(module, prompt: str, image_payloads: list[str] 
         if fallback_timeout_only and not module.is_timeout_error(exc):
             raise
         module.warn(f"Primary preview model '{primary_model}' failed, using fallback '{fallback_model}': {exc}")
-        return call_ollama_preview(module, prompt, image_payloads, fallback_model, fallback_timeout), {
-            "provider": "ollama",
+        return call_ollama_preview(module, prompt, image_payloads, fallback_model, fallback_timeout, provider_id), {
+            "provider": provider_id,
             "model": fallback_model,
             "fallback_used": True,
             "fallback_from": primary_model,
@@ -4571,7 +4761,12 @@ def build_ai_preview(document_id: int, use_vision: bool = False) -> tuple[int, d
     )
     started = time.time()
     preview_ocr_model = preview_config.get("preview_ocr_model", "") or None
-    raw_result, response_meta = get_preview_response_details(module, prompt, model=preview_ocr_model)
+    raw_result, response_meta = get_preview_response_details(
+        module,
+        prompt,
+        model=preview_ocr_model,
+        provider=preview_config.get("preview_ocr_provider", "ollama_local"),
+    )
     proposal = module.refine_result(module.sanitize_result(raw_result), document)
     proposal = apply_rule_based_preview_corrections(proposal, document_hints)
     try:
@@ -5500,7 +5695,27 @@ class Handler(BaseHTTPRequestHandler):
             return
         if self.path == "/api/models":
             status, payload = ollama_request("/api/tags")
+            if status != 200 or not isinstance(payload, dict):
+                payload = {"models": []}
+                status = 200
             if status == 200 and isinstance(payload, dict):
+                existing_names = {
+                    str(item.get("name", "")).strip()
+                    for item in payload.get("models", [])
+                    if isinstance(item, dict) and str(item.get("name", "")).strip()
+                }
+                for entry in parse_model_library_entries():
+                    model_name = str(entry.get("model") or entry.get("name") or "").strip()
+                    if not model_name or model_name in existing_names:
+                        continue
+                    payload.setdefault("models", []).append(
+                        {
+                            "name": model_name,
+                            "source": str(entry.get("provider") or "external"),
+                            "homepage": str(entry.get("link") or entry.get("homepage") or ""),
+                        }
+                    )
+                    existing_names.add(model_name)
                 try:
                     paperless_env = load_paperless_env()
                 except Exception as exc:

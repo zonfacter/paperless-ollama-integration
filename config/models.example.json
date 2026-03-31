@@ -1,24 +1,25 @@
 {
   "library": [
     {
-      "id": "qwen3.5-9b",
+      "id": "qwen3.5-2b-gpu",
       "provider": "ollama_local",
-      "model": "qwen3.5:9b",
+      "model": "qwen3.5:2b",
       "role_hint": [
-        "import",
-        "tag_review"
+        "preview",
+        "fast_review"
       ],
-      "link": "https://ollama.com/library/qwen3.5:9b"
+      "link": "https://ollama.com/library/qwen3.5:2b"
     },
     {
       "id": "qwen3.5-4b",
-      "provider": "ollama_local",
-      "model": "qwen3.5:4b",
+      "provider": "openai_local",
+      "model": "Qwen3.5-4B-Q4_K_M",
       "role_hint": [
-        "preview",
-        "fallback"
+        "import",
+        "fallback",
+        "tag_review"
       ],
-      "link": "https://ollama.com/library/qwen3.5:4b"
+      "link": "https://huggingface.co/unsloth/Qwen3.5-4B-GGUF"
     },
     {
       "id": "qwen3.5-0.8b",
@@ -28,14 +29,26 @@
         "vision_preview"
       ],
       "link": "https://ollama.com/library/qwen3.5:0.8b"
+    },
+    {
+      "id": "qwen3.5-9b-cpu",
+      "provider": "openai_local",
+      "model": "Qwen3.5-9B-Q4_K_M",
+      "role_hint": [
+        "deep_review"
+      ],
+      "link": "https://huggingface.co/unsloth/Qwen3.5-9B-GGUF"
     }
   ],
   "roles": {
-    "import_model": "qwen3.5:9b",
-    "fallback_model": "qwen3.5:4b",
-    "preview_model": "qwen3.5:4b",
-    "tag_review_model": "qwen3.5:9b",
+    "import_model": "Qwen3.5-4B-Q4_K_M",
+    "import_provider": "openai_local",
+    "fallback_model": "qwen3.5:2b",
+    "fallback_provider": "ollama_local",
+    "preview_model": "qwen3.5:2b",
+    "preview_provider": "ollama_local",
+    "tag_review_model": "Qwen3.5-4B-Q4_K_M",
+    "tag_review_provider": "openai_local",
     "vision_model": "qwen3.5:0.8b"
   }
 }
-

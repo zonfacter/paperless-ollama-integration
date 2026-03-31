@@ -25,6 +25,14 @@ Der Dienst ist absichtlich optional und wird ueber ein eigenes Profil gestartet:
 sudo docker compose --profile chat-ui up -d open-webui
 ```
 
+Die Image-Version wird bewusst nicht ueber `latest`, sondern ueber eine feste Variable gesteuert:
+
+```dotenv
+OPEN_WEBUI_IMAGE_TAG=v0.8.12
+```
+
+Das macht Updates reproduzierbar und Rollbacks einfacher.
+
 Default-Port:
 
 - `http://HOST:8081`
@@ -43,6 +51,13 @@ Damit bleiben erhalten:
 - Benutzer
 - Verbindungsdaten
 - Chat-Historie
+
+Wichtig fuer Updates:
+
+- `./data/open-webui` darf nicht geloescht werden
+- `OPEN_WEBUI_SECRET_KEY` muss stabil bleiben
+
+Dann bleiben Chats und Einstellungen auch nach einem Container-Update erhalten.
 
 ## Standardpfad: `ollama`
 

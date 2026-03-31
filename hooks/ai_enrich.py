@@ -289,58 +289,127 @@ OCR-Inhalt:
 """
 
 
-def call_openai(prompt: str, model: str | None = None) -> dict:
-    api_key = env("OPENAI_API_KEY")
-    if not api_key:
-        raise RuntimeError("OPENAI_API_KEY is not set")
-    model = model or env("PAPERLESS_AI_OPENAI_MODEL", "gpt-5.4-mini")
-    payload = {
-        "model": model,
-        "input": [
-            {
-                "role": "system",
-                "content": [
-                    {
-                        "type": "input_text",
-                        "text": "Gib ausschliesslich valides JSON zurueck.",
-                    }
-                ],
-            },
-            {
-                "role": "user",
-                "content": [{"type": "input_text", "text": prompt}],
-            },
-        ],
+def normalize_provider_id(value: str | None, default: str = "ollama_local") -> str:
+    raw = str(value or "").strip().lower()
+    if not raw:
+        return default
+    aliases = {
+        "ollama": "ollama_local",
+        "openai": "openai_local",
+        "llama_cpp_local": "openai_local",
+        "llama_cpp_remote": "openai_remote",
     }
+    normalized = aliases.get(raw, raw)
+    if normalized in {"ollama_local", "ollama_remote", "openai_local", "openai_remote"}:
+        return normalized
+    return default
+
+
+def provider_kind(provider_id: str | None) -> str:
+    normalized = normalize_provider_id(provider_id)
+    if normalized.startswith("ollama_"):
+        return "ollama"
+    if normalized.startswith("openai_"):
+        return "openai"
+    raise RuntimeError(f"Unsupported provider id: {provider_id}")
+
+
+def provider_ollama_url(provider_id: str | None) -> str:
+    normalized = normalize_provider_id(provider_id)
+    if normalized == "ollama_remote":
+        return env("PAPERLESS_AI_PROVIDER_OLLAMA_REMOTE_URL", env("PAPERLESS_AI_OLLAMA_URL", "http://127.0.0.1:11434"))
+    return env("PAPERLESS_AI_PROVIDER_OLLAMA_LOCAL_URL", env("PAPERLESS_AI_OLLAMA_URL", "http://127.0.0.1:11434"))
+
+
+def provider_openai_base_url(provider_id: str | None) -> str:
+    normalized = normalize_provider_id(provider_id)
+    default_base = env("PAPERLESS_AI_OPENAI_BASE_URL", "https://api.openai.com/v1")
+    if normalized == "openai_remote":
+        return env("PAPERLESS_AI_PROVIDER_OPENAI_REMOTE_URL", default_base)
+    return env("PAPERLESS_AI_PROVIDER_OPENAI_LOCAL_URL", default_base)
+
+
+def provider_openai_api_key(provider_id: str | None) -> str:
+    api_key = env("PAPERLESS_AI_OPENAI_API_KEY", env("OPENAI_API_KEY", ""))
+    base_url = provider_openai_base_url(provider_id)
+    if api_key:
+        return api_key
+    if "api.openai.com" in base_url:
+        raise RuntimeError("OPENAI_API_KEY is not set")
+    return "dummy"
+
+
+def call_openai(prompt: str, model: str | None = None, provider_id: str | None = None, timeout: float | None = None) -> dict:
+    base_url = provider_openai_base_url(provider_id).rstrip("/")
+    api_key = provider_openai_api_key(provider_id)
+    model = model or env("PAPERLESS_AI_OPENAI_MODEL", env("PAPERLESS_AI_OLLAMA_MODEL", "gpt-5.4-mini"))
+    headers = {
+        "Authorization": f"Bearer {api_key}",
+        "Content-Type": "application/json",
+    }
+    if "api.openai.com" in base_url:
+        payload = {
+            "model": model,
+            "input": [
+                {
+                    "role": "system",
+                    "content": [
+                        {
+                            "type": "input_text",
+                            "text": "Gib ausschliesslich valides JSON zurueck.",
+                        }
+                    ],
+                },
+                {
+                    "role": "user",
+                    "content": [{"type": "input_text", "text": prompt}],
+                },
+            ],
+        }
+        target_url = f"{base_url}/responses"
+    else:
+        payload = {
+            "model": model,
+            "temperature": 0,
+            "messages": [
+                {"role": "system", "content": "Gib ausschliesslich valides JSON zurueck."},
+                {"role": "user", "content": prompt},
+            ],
+        }
+        target_url = f"{base_url}/chat/completions"
     req = urllib.request.Request(
-        "https://api.openai.com/v1/responses",
+        target_url,
         data=json.dumps(payload).encode("utf-8"),
-        headers={
-            "Authorization": f"Bearer {api_key}",
-            "Content-Type": "application/json",
-        },
+        headers=headers,
         method="POST",
     )
     try:
-        with urllib.request.urlopen(req, timeout=90) as response:
+        with urllib.request.urlopen(req, timeout=timeout or 90) as response:
             raw = json.loads(response.read().decode("utf-8"))
     except urllib.error.HTTPError as exc:
         body = exc.read().decode("utf-8", errors="replace")
-        raise RuntimeError(f"OpenAI request failed with {exc.code}: {body}") from exc
-    output = []
-    for item in raw.get("output", []):
-        for content in item.get("content", []):
-            text = content.get("text")
+        raise RuntimeError(f"OpenAI-compatible request failed with {exc.code}: {body}") from exc
+    output: list[str] = []
+    if "api.openai.com" in base_url:
+        for item in raw.get("output", []):
+            for content in item.get("content", []):
+                text = content.get("text")
+                if text:
+                    output.append(text)
+    else:
+        for choice in raw.get("choices", []):
+            message = choice.get("message") or {}
+            text = message.get("content")
             if text:
-                output.append(text)
+                output.append(str(text))
     if not output:
-        raise RuntimeError("OpenAI response did not contain text output")
+        raise RuntimeError("OpenAI-compatible response did not contain text output")
     return parse_json_object("\n".join(output))
 
 
-def call_ollama(prompt: str, model: str | None = None, timeout: float | None = None) -> dict:
+def call_ollama(prompt: str, model: str | None = None, timeout: float | None = None, provider_id: str | None = None) -> dict:
     model = model or env("PAPERLESS_AI_OLLAMA_MODEL", "qwen2.5:7b-instruct")
-    host = env("PAPERLESS_AI_OLLAMA_URL", "http://127.0.0.1:11434")
+    host = provider_ollama_url(provider_id)
     client = HttpClient(host)
     num_thread = positive_int(env("PAPERLESS_AI_OLLAMA_NUM_THREAD", "4"), 4)
     payload = {
@@ -380,24 +449,57 @@ def get_provider_response_details(
     fallback_model_override: str | None = None,
     fallback_timeout_override: float | None = None,
     fallback_enabled_override: bool | None = None,
+    provider_override: str | None = None,
+    fallback_provider_override: str | None = None,
 ) -> tuple[dict, dict]:
-    provider = env("PAPERLESS_AI_PROVIDER", "ollama").lower()
-    if provider == "openai":
-        return call_openai(prompt, model=model_override or env("PAPERLESS_AI_OPENAI_MODEL", "gpt-5.4-mini")), {
-            "provider": "openai",
-            "model": model_override or env("PAPERLESS_AI_OPENAI_MODEL", "gpt-5.4-mini"),
-            "fallback_used": False,
-        }
-    if provider == "ollama":
+    provider = normalize_provider_id(provider_override or env("PAPERLESS_AI_PROVIDER", "ollama_local"))
+    if provider_kind(provider) == "openai":
+        model_name = model_override or env("PAPERLESS_AI_OPENAI_MODEL", env("PAPERLESS_AI_OLLAMA_MODEL", "gpt-5.4-mini"))
+        primary_timeout = timeout_override if timeout_override is not None else float(env("PAPERLESS_AI_HTTP_TIMEOUT_SECONDS", "300"))
+        fallback_enabled = fallback_enabled_override if fallback_enabled_override is not None else env("PAPERLESS_AI_FALLBACK_ENABLED", "false").lower() in ("1", "true", "yes", "on")
+        fallback_model = fallback_model_override or env("PAPERLESS_AI_FALLBACK_MODEL", model_name)
+        fallback_timeout = fallback_timeout_override if fallback_timeout_override is not None else float(env("PAPERLESS_AI_FALLBACK_HTTP_TIMEOUT_SECONDS", str(primary_timeout)))
+        fallback_timeout_only = env("PAPERLESS_AI_FALLBACK_ON_TIMEOUT_ONLY", "true").lower() in ("1", "true", "yes", "on")
+        fallback_provider = normalize_provider_id(fallback_provider_override or env("PAPERLESS_AI_FALLBACK_PROVIDER", provider))
+        try:
+            return call_openai(prompt, model=model_name, provider_id=provider, timeout=primary_timeout), {
+                "provider": provider,
+                "model": model_name,
+                "fallback_used": False,
+                "timeout_seconds": primary_timeout,
+            }
+        except Exception as exc:
+            if not fallback_enabled:
+                raise
+            if fallback_timeout_only and not is_timeout_error(exc):
+                raise
+            warn(f"Primary model '{model_name}' via '{provider}' failed, using fallback '{fallback_model}' via '{fallback_provider}': {exc}")
+            if provider_kind(fallback_provider) == "openai":
+                return call_openai(prompt, model=fallback_model, provider_id=fallback_provider, timeout=fallback_timeout), {
+                    "provider": fallback_provider,
+                    "model": fallback_model,
+                    "fallback_used": True,
+                    "fallback_from": model_name,
+                    "timeout_seconds": fallback_timeout,
+                }
+            return call_ollama(prompt, model=fallback_model, timeout=fallback_timeout, provider_id=fallback_provider), {
+                "provider": fallback_provider,
+                "model": fallback_model,
+                "fallback_used": True,
+                "fallback_from": model_name,
+                "timeout_seconds": fallback_timeout,
+            }
+    if provider_kind(provider) == "ollama":
         primary_model = model_override or env("PAPERLESS_AI_OLLAMA_MODEL", "qwen2.5:7b-instruct")
         primary_timeout = timeout_override if timeout_override is not None else float(env("PAPERLESS_AI_HTTP_TIMEOUT_SECONDS", "300"))
         fallback_enabled = fallback_enabled_override if fallback_enabled_override is not None else env("PAPERLESS_AI_FALLBACK_ENABLED", "false").lower() in ("1", "true", "yes", "on")
         fallback_model = fallback_model_override or env("PAPERLESS_AI_FALLBACK_MODEL", "qwen2.5:3b-instruct")
         fallback_timeout = fallback_timeout_override if fallback_timeout_override is not None else float(env("PAPERLESS_AI_FALLBACK_HTTP_TIMEOUT_SECONDS", str(primary_timeout)))
         fallback_timeout_only = env("PAPERLESS_AI_FALLBACK_ON_TIMEOUT_ONLY", "true").lower() in ("1", "true", "yes", "on")
+        fallback_provider = normalize_provider_id(fallback_provider_override or env("PAPERLESS_AI_FALLBACK_PROVIDER", provider))
         try:
-            return call_ollama(prompt, model=primary_model, timeout=primary_timeout), {
-                "provider": "ollama",
+            return call_ollama(prompt, model=primary_model, timeout=primary_timeout, provider_id=provider), {
+                "provider": provider,
                 "model": primary_model,
                 "fallback_used": False,
                 "timeout_seconds": primary_timeout,
@@ -407,9 +509,17 @@ def get_provider_response_details(
                 raise
             if fallback_timeout_only and not is_timeout_error(exc):
                 raise
-            warn(f"Primary model '{primary_model}' failed, using fallback '{fallback_model}': {exc}")
-            return call_ollama(prompt, model=fallback_model, timeout=fallback_timeout), {
-                "provider": "ollama",
+            warn(f"Primary model '{primary_model}' via '{provider}' failed, using fallback '{fallback_model}' via '{fallback_provider}': {exc}")
+            if provider_kind(fallback_provider) == "openai":
+                return call_openai(prompt, model=fallback_model, provider_id=fallback_provider, timeout=fallback_timeout), {
+                    "provider": fallback_provider,
+                    "model": fallback_model,
+                    "fallback_used": True,
+                    "fallback_from": primary_model,
+                    "timeout_seconds": fallback_timeout,
+                }
+            return call_ollama(prompt, model=fallback_model, timeout=fallback_timeout, provider_id=fallback_provider), {
+                "provider": fallback_provider,
                 "model": fallback_model,
                 "fallback_used": True,
                 "fallback_from": primary_model,
@@ -912,6 +1022,8 @@ def apply_tag_review(document: dict, result: dict) -> tuple[dict, dict]:
     fallback_model = env("PAPERLESS_AI_TAG_FALLBACK_MODEL", env("PAPERLESS_AI_FALLBACK_MODEL", "qwen3.5:0.8b"))
     fallback_timeout = float(env("PAPERLESS_AI_TAG_FALLBACK_HTTP_TIMEOUT_SECONDS", env("PAPERLESS_AI_FALLBACK_HTTP_TIMEOUT_SECONDS", str(tag_timeout))))
     fallback_enabled = env("PAPERLESS_AI_TAG_FALLBACK_ENABLED", env("PAPERLESS_AI_FALLBACK_ENABLED", "true")).lower() in ("1", "true", "yes", "on")
+    tag_provider = env("PAPERLESS_AI_TAG_PROVIDER", env("PAPERLESS_AI_PROVIDER", "ollama_local"))
+    tag_fallback_provider = env("PAPERLESS_AI_TAG_FALLBACK_PROVIDER", env("PAPERLESS_AI_FALLBACK_PROVIDER", tag_provider))
     raw_tags, meta = get_provider_response_details(
         prompt,
         model_override=tag_model,
@@ -919,6 +1031,8 @@ def apply_tag_review(document: dict, result: dict) -> tuple[dict, dict]:
         fallback_model_override=fallback_model,
         fallback_timeout_override=fallback_timeout,
         fallback_enabled_override=fallback_enabled,
+        provider_override=tag_provider,
+        fallback_provider_override=tag_fallback_provider,
     )
     reviewed = dict(result)
     rule_tags = fallback_tags_for_family(result, document)
