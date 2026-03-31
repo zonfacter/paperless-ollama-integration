@@ -11,6 +11,8 @@
         <param name="applyRotation" type="bool">true</param>
         <!-- Höhere DPI für bessere Erkennung -->
         <param name="imageDPI" type="int">300</param>
+        <!-- Mehrere Threads für parallele Seitenverarbeitung -->
+        <param name="threadCount" type="int">3</param>
       </params>
     </parser>
   </parsers>
