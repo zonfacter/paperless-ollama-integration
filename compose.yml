@@ -293,6 +293,7 @@ services:
       - ./scripts:/usr/src/paperless-ai/scripts:ro
       - ./config:/usr/src/paperless-ai/config:ro
       - ./web:/app/web:ro
+      - ./web/server.py:/app/server.py:ro
     networks:
       - paperless-ai
 
