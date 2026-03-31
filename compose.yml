@@ -325,7 +325,8 @@ services:
       RAG_TOP_K: ${OPEN_WEBUI_RAG_TOP_K:-5}
       ENABLE_RAG_HYBRID_SEARCH: ${OPEN_WEBUI_ENABLE_RAG_HYBRID_SEARCH:-True}
       # Tika für Dokumenten-Extraktion (bereits im Stack vorhanden)
-      CONTENT_EXTRACTION_ENGINE: ${OPEN_WEBUI_CONTENT_EXTRACTION_ENGINE:-tika}
+      # "default" = PyMuPDF/pdfminer für Text-PDFs; "tika" nur für komplexe Formate
+      CONTENT_EXTRACTION_ENGINE: ${OPEN_WEBUI_CONTENT_EXTRACTION_ENGINE:-default}
       TIKA_SERVER_URL: ${OPEN_WEBUI_TIKA_SERVER_URL:-http://tika:9998}
     ports:
       - "${OPEN_WEBUI_BIND_HOST:-0.0.0.0}:${OPEN_WEBUI_PUBLIC_PORT:-8081}:8080"
