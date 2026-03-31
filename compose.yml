@@ -375,8 +375,9 @@ services:
       --host 0.0.0.0
       --port 8080
       --n-gpu-layers ${LLAMA_CPP_GPU_LAYERS:-99}
-      --ctx-size ${LLAMA_CPP_CTX_SIZE:-4096}
+      --ctx-size ${LLAMA_CPP_CTX_SIZE:-16384}
       --threads ${LLAMA_CPP_THREADS:-4}
+      --reasoning-budget ${LLAMA_CPP_REASONING_BUDGET:-0}
       --log-prefix
     volumes:
       - ${LLAMA_CPP_MODELS_PATH:-/volume1/docker/llama-cpp-test/models}:/models:ro
