@@ -1,0 +1,17 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<properties>
+  <parsers>
+    <parser class="org.apache.tika.parser.ocr.TesseractOCRParser">
+      <params>
+        <!-- Deutsch + Englisch für gemischte Dokumente -->
+        <param name="language" type="string">deu+eng</param>
+        <!-- Seite automatisch segmentieren (beste Qualität für gescannte Dokumente) -->
+        <param name="pageSegMode" type="int">1</param>
+        <!-- Rotation automatisch korrigieren -->
+        <param name="applyRotation" type="bool">true</param>
+        <!-- Höhere DPI für bessere Erkennung -->
+        <param name="imageDPI" type="int">300</param>
+      </params>
+    </parser>
+  </parsers>
+</properties>

@@ -56,6 +56,10 @@ services:
     restart: unless-stopped
     cpus: "${TIKA_CPUS:-1.00}"
     mem_limit: "${TIKA_MEM_LIMIT:-2g}"
+    environment:
+      TIKA_SERVER_OPTS: "-c /tika-config.xml"
+    volumes:
+      - ./config/tika-config.xml:/tika-config.xml:ro
     networks:
       - paperless-ai
 
