@@ -20,6 +20,13 @@ Lokale Integration von `paperless-ngx` mit `Ollama` fuer KI-gestuetzte Nachbearb
 - erstellt `docker-compose.override.yml`
 - bindet Hook, Prompt und Backfill per Volume Mount ein
 
+### NAS / Voller Compose-Stack
+
+- `scripts/bootstrap-nas-stack.sh` scaffoldet den aktuellen NAS-Stack
+- legt alle benoetigten Daten- und Konfigurationspfade fuer `paperless-ngx`, `ollama`, `paperless-ai-web`, `open-webui`, `tika-ocr-proxy` und die optionalen Image-/OCR-Dienste an
+- kopiert nur fehlende Beispielkonfigurationen
+- bietet `--dry-run` und `--validate`, damit ein Setup vor dem ersten Start pruefbar bleibt
+
 ### Was du bereithalten solltest
 
 - Paperless API URL
@@ -82,7 +89,9 @@ Fuer den NAS-Pfad gilt zusaetzlich:
 - `scripts/paperless-set-ollama-model`
   - Hilfsskript zum Umschalten des aktiven Paperless-Modells
 - `scripts/install-paperless-ai.sh`
-  - gefuehrter Installer fuer native und Docker-basierte Paperless-Setups
+  - gefuehrter Installer fuer Hook-/Prompt-Integration in native und einfache Docker-basierte Paperless-Setups
+- `scripts/bootstrap-nas-stack.sh`
+  - Scaffold- und Validierungsskript fuer den vollstaendigen NAS-/Compose-Stack dieses Repos
 - `scripts/configure-paperless-ai-ollama.sh`
   - Konfigurationshilfe fuer `paperless.conf`
 - `docs/`
@@ -105,6 +114,8 @@ Fuer den NAS-Pfad gilt zusaetzlich:
 
 ## Schnellstart
 
+### Native oder einfache Hook-Integration
+
 Empfohlener Einstieg:
 
 ```bash
@@ -125,6 +136,26 @@ Der Installer:
 - sagt frueh, welche Zugangsdaten und Pfade benoetigt werden
 - fragt die noetigen Werte interaktiv ab
 - schreibt die passenden Dateien fuer den gewaehlten Modus
+
+### Voller NAS-/Compose-Stack
+
+Fuer den repo-gepflegten NAS-Stack ist `bootstrap-nas-stack.sh` der Referenzpfad:
+
+```bash
+git clone https://github.com/zonfacter/paperless-ollama-integration.git
+cd paperless-ollama-integration
+./scripts/bootstrap-nas-stack.sh --dry-run
+./scripts/bootstrap-nas-stack.sh
+```
+
+Das Skript:
+
+- legt die aktuellen Daten- und Konfigurationspfade an
+- kopiert nur fehlende Beispieldateien
+- validiert `.env`, die benoetigten JSON-/ENV-Dateien und den Compose-Stand
+- prueft optionale Bildpfade gegen die aktuelle `OPEN_WEBUI`-Konfiguration
+
+Details dazu stehen in [docs/NAS_DEPLOYMENT.md](docs/NAS_DEPLOYMENT.md).
  
 ## Aktueller Workflow
 
@@ -249,6 +280,7 @@ Kurz gesagt:
 
 ## Dokumentation
 
+- [AI_INSTALL](AI_INSTALL.md)
 - [ROADMAP](ROADMAP.md)
 - [CONFIG_EXAMPLES](docs/CONFIG_EXAMPLES.md)
 - [INSTALL](docs/INSTALL.md)

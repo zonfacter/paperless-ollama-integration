@@ -2,7 +2,14 @@
 
 ## Goal
 
-The easiest path is the guided installer:
+This repository currently has two supported installation paths:
+
+- `scripts/install-paperless-ai.sh`
+  - for native installs and simple Docker/Compose setups where you mainly want to add the Hook, Prompt, Backfill script, and basic Paperless integration
+- `scripts/bootstrap-nas-stack.sh`
+  - for the full repo-managed NAS/Compose stack with `paperless-ai-web`, optional `open-webui`, repo-managed wrapper images, telemetry, and optional image/OCR sidecars
+
+If you only need the Hook integration, the guided installer is the easiest path:
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/zonfacter/paperless-ollama-integration/main/scripts/install-paperless-ai.sh -o /tmp/install-paperless-ai.sh
@@ -33,6 +40,21 @@ cd paperless-ollama-integration
 sudo bash scripts/install-paperless-ai.sh --dry-run
 ```
 
+For the full NAS/Compose stack, use the bootstrap script instead:
+
+```bash
+git clone https://github.com/zonfacter/paperless-ollama-integration.git
+cd paperless-ollama-integration
+./scripts/bootstrap-nas-stack.sh --dry-run
+./scripts/bootstrap-nas-stack.sh
+```
+
+And to validate an already scaffolded checkout:
+
+```bash
+./scripts/bootstrap-nas-stack.sh --validate
+```
+
 ## What You Need Before Starting
 
 - a running `paperless-ngx` instance
@@ -53,6 +75,27 @@ For Docker installs you will usually also need:
 - the path to your `docker-compose.yml` or `compose.yml`
 - the Paperless webserver service name, usually `webserver`
 - a host path where hook, prompt, and backfill files should be mounted
+
+## Full NAS / Compose Stack
+
+`bootstrap-nas-stack.sh` is the reference entry point for the current repo-managed NAS stack.
+
+It currently handles:
+
+- data directories for `paperless-ngx`, `ollama`, `paperless-ai-web`, `open-webui`, `ComfyUI`, `OpenVINO`, and optional OCR sidecars
+- missing default files such as `.env`, `compose.override.yml`, and the JSON/ENV config files under `config/`
+- validation of required secrets and placeholder values
+- workspace-path checks for `Open WebUI`
+- image backend checks for:
+  - external OpenAI-compatible image endpoints
+  - experimental local `ComfyUI` checkpoints
+- `docker compose config -q` validation when Docker and `.env` are available
+
+Important scope note:
+
+- `install-paperless-ai.sh` does not try to install or manage the entire expanded NAS stack
+- `bootstrap-nas-stack.sh` does not replace the guided Hook installer for native VM setups
+- the two scripts intentionally cover different deployment scopes
 
 ## Optional: PaddleOCR API Container
 
@@ -127,7 +170,7 @@ sudo chmod 755 /opt/paperless/ai_enrich.py
 sudo chmod 644 /opt/paperless/ai_enrich_prompt.txt
 ```
 
-## Guided Installer
+## Guided Hook Installer
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/zonfacter/paperless-ollama-integration/main/scripts/install-paperless-ai.sh -o /tmp/install-paperless-ai.sh

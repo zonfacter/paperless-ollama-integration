@@ -20,6 +20,13 @@ Local integration of `paperless-ngx` with `Ollama` for AI-assisted document post
 - creates `docker-compose.override.yml`
 - mounts hook, prompt, and backfill into the Paperless container
 
+### NAS / Full Compose Stack
+
+- `scripts/bootstrap-nas-stack.sh` scaffolds the current NAS stack
+- creates the required data and config paths for `paperless-ngx`, `ollama`, `paperless-ai-web`, `open-webui`, `tika-ocr-proxy`, and the optional image/OCR sidecars
+- copies only missing example configuration files
+- supports `--dry-run` and `--validate` so the setup can be checked before the first start
+
 ### What You Should Have Ready
 
 - Paperless API URL
@@ -73,7 +80,9 @@ The current state of this project reflects a working setup with the following bu
 - `scripts/paperless-set-ollama-model`
   - helper script to switch the active Paperless model
 - `scripts/install-paperless-ai.sh`
-  - guided installer for native and Docker-based Paperless setups
+  - guided installer for hook/prompt integration in native and simple Docker-based Paperless setups
+- `scripts/bootstrap-nas-stack.sh`
+  - scaffold and validation script for the full repo-managed NAS/Compose stack
 - `scripts/configure-paperless-ai-ollama.sh`
   - configuration helper for `paperless.conf`
 - `docs/`
@@ -93,6 +102,8 @@ The current state of this project reflects a working setup with the following bu
 6. The hook writes title, correspondent, document type, and tags back to Paperless.
 
 ## Quick Start
+
+### Native Or Simple Hook Integration
 
 Recommended entry point:
 
@@ -114,6 +125,26 @@ The installer:
 - tells you early which credentials and paths are required
 - asks for the needed values interactively
 - writes the right files for the chosen mode
+
+### Full NAS / Compose Stack
+
+For the repo-managed NAS stack, `bootstrap-nas-stack.sh` is the reference path:
+
+```bash
+git clone https://github.com/zonfacter/paperless-ollama-integration.git
+cd paperless-ollama-integration
+./scripts/bootstrap-nas-stack.sh --dry-run
+./scripts/bootstrap-nas-stack.sh
+```
+
+The script:
+
+- creates the current data and config paths
+- copies only missing example files
+- validates `.env`, the required JSON/ENV files, and the Compose state
+- checks optional image backends against the active `OPEN_WEBUI` settings
+
+See [docs/NAS_DEPLOYMENT.md](docs/NAS_DEPLOYMENT.md) for the full NAS startup path.
 
 ## Current Workflow
 
@@ -239,6 +270,7 @@ In short:
 
 ## Documentation
 
+- [AI_INSTALL](AI_INSTALL.md)
 - [ROADMAP](ROADMAP.md)
 - [CONFIG_EXAMPLES](docs/CONFIG_EXAMPLES.md)
 - [INSTALL](docs/INSTALL.md)

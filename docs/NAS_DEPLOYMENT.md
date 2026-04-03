@@ -19,6 +19,22 @@ Wichtig:
 - diese Datei beschreibt den Betriebs- und Startpfad
 - `NAS_RUNTIME_FINDINGS.md` beschreibt die bereits verifizierten Modell- und Runtime-Grenzen auf Intel Iris Xe
 
+## Portainer-Hinweis
+
+Die `compose.yml` ist grundsaetzlich Docker-/Compose-kompatibel und kann auch in `Portainer` als Stack importiert werden.
+
+Wichtige Einschraenkungen:
+
+- `profiles` sind in `Portainer` meist unkomfortabler als im normalen `docker compose`-CLI-Betrieb
+- `build:`-basierte Dienste wie das repo-gepflegte `open-webui`-Wrapper-Image oder `comfyui-amd` sind in `Portainer` fehleranfaelliger als vorgebaute Images
+- Host-Binds wie `/dev/kfd`, `/dev/dri`, `/sys` oder `/var/run/docker.sock` bleiben hostabhaengig und brauchen in `Portainer` dieselbe Sorgfalt wie auf der CLI
+- fuer den stabilen Standardpfad ist die Compose-Datei geeignet, die experimentellen lokalen Bild-Backends sollten in `Portainer` aber nicht als erste Erwartung fuer einen problemlosen One-Click-Stack betrachtet werden
+
+Kurz gesagt:
+
+- ja, die Datei ist weitgehend `Portainer`-kompatibel
+- fuer reproduzierbare Erstinstallationen ist der normale `docker compose`-Pfad dennoch die Referenz
+
 ## Empfohlener Host-Pfad
 
 ```text
@@ -28,7 +44,28 @@ Wichtig:
 ## Vorbereitung
 
 1. Projekt nach `/volume1/docker/paperless-ai/` kopieren oder dort klonen.
-2. Beispielkonfigurationen kopieren:
+2. Zuerst den Bootstrap im Dry-Run laufen lassen:
+
+```bash
+./scripts/bootstrap-nas-stack.sh --dry-run
+```
+
+3. Dann den Scaffold wirklich ausfuehren:
+
+```bash
+./scripts/bootstrap-nas-stack.sh
+```
+
+Der Bootstrap:
+
+- legt alle aktuellen Daten- und Konfigurationspfade des Repos an
+- kopiert nur fehlende Standarddateien
+- validiert den Compose-Stand und die aktivierte Open-WebUI-/Image-Konfiguration
+- ersetzt nicht das Bearbeiten von `.env`, nimmt dir aber die fehleranfaellige Grundverdrahtung ab
+
+4. Alternativ kannst du den Vorgang weiter manuell nachvollziehen. Der Bootstrap macht dabei im Wesentlichen genau diese Schritte:
+
+5. Beispielkonfigurationen kopieren:
 
 ```bash
 cp .env.example .env
@@ -42,7 +79,7 @@ cp config/models.example.json config/models.json
 cp config/version.example.json config/version.json
 ```
 
-3. Verzeichnisse anlegen:
+6. Verzeichnisse anlegen:
 
 ```bash
 mkdir -p \
@@ -63,7 +100,7 @@ mkdir -p \
   config/tessdata-best
 ```
 
-4. `.env` anpassen:
+7. `.env` anpassen:
    - Passwoerter
    - Secret Key
    - Zeitzone

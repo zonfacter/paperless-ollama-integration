@@ -40,6 +40,12 @@ Zusatz fuer dieses Repo:
 - repo-gepflegte Profile und Tools werden beim Start automatisch wieder installiert
 - dadurch bleibt auch ein `recreate` reproduzierbar und verliert keine projektkritischen Anpassungen
 
+Portainer-Hinweis:
+
+- `open-webui` laeuft auch in `Portainer` grundsaetzlich als Stack-Dienst
+- wegen `build:`-Nutzung, Wrapper-Image und optionalen Host-Mounts ist der Dienst im normalen `docker compose`-Betrieb aber die verlässlichere Referenz
+- fuer `Portainer` gilt daher: moeglich, aber nicht der bevorzugte Test- und Releasepfad dieses Repos
+
 Default-Port:
 
 - `http://HOST:8081`
