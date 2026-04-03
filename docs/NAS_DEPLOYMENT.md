@@ -55,6 +55,10 @@ mkdir -p \
   data/ollama \
   data/paperless-ai-web \
   data/open-webui \
+  data/comfyui/models/checkpoints \
+  data/comfyui/input \
+  data/comfyui/output \
+  data/comfyui/custom_nodes \
   data/paddleocr-cache \
   config/tessdata-best
 ```
@@ -67,7 +71,8 @@ mkdir -p \
    - Host-Ports
    - CPU-/RAM-Limits pro Container
    - API-Token spaeter nach erstem Admin-Login
-   - GPU-/iGPU-Defaults pruefen
+  - GPU-/iGPU-Defaults pruefen
+  - falls Bildgenerierung ueber AMD gewuenscht ist: Checkpoint-Datei nach `data/comfyui/models/checkpoints/` legen
 
 Empfohlener Start auf diesem NAS:
 
@@ -207,7 +212,7 @@ curl -sS http://127.0.0.1:3000/ | head
 Wenn zusaetzlich ein separater Chat-/Vergleichsdienst fuer lokale Modelle gewuenscht ist:
 
 ```bash
-sudo docker compose --profile chat-ui up -d open-webui
+sudo docker compose --profile chat-ui up -d --build open-webui
 ```
 
 Dann pruefen:
@@ -225,6 +230,43 @@ Wichtige Einordnung:
 Siehe auch:
 
 - [OPEN_WEBUI.md](OPEN_WEBUI.md)
+
+## Optional: AMD-Bildgenerierung fuer Open WebUI
+
+Der lokale AMD-Pfad bleibt im Repo vorhanden, ist aktuell aber experimentell und nicht der empfohlene Standard fuer Neuinstallationen.
+
+Start:
+
+```bash
+sudo docker compose --profile chat-ui --profile image-amd up -d --build comfyui-amd open-webui
+```
+
+Wichtig:
+
+- ein Bild-Checkpoint muss vorher auf dem Host liegen, z.B. unter:
+
+```text
+data/comfyui/models/checkpoints/Deliberate_v2.safetensors
+```
+
+- `OPEN_WEBUI_IMAGE_GENERATION_MODEL` muss zum Dateinamen dieses Checkpoints passen
+- auf dem hier getesteten `MI50/gfx906`-Host war auch ein `SD 1.5`-Checkpoint noch nicht stabil genug fuer den produktiven Standardpfad
+- die Open-WebUI-Workflow-Definition liegt repo-seitig im Wrapper-Image und bleibt dadurch auch nach `recreate` reproduzierbar
+- sowohl der AMD- als auch der fruehere Intel-iGPU-Pfad sind damit nur noch experimentell und nicht der empfohlene Hauptpfad dieses Repos
+
+## Empfohlener Bild-Standardpfad
+
+Fuer ein stabiles Setup sollte Open WebUI Bilder standardmaessig ueber einen externen OpenAI-kompatiblen Bilddienst erzeugen.
+
+Minimal:
+
+```dotenv
+OPEN_WEBUI_ENABLE_IMAGE_GENERATION=true
+OPEN_WEBUI_IMAGE_GENERATION_ENGINE=openai
+OPEN_WEBUI_IMAGE_GENERATION_MODEL=gpt-image-1
+OPEN_WEBUI_IMAGES_OPENAI_API_BASE_URL=<dein-openai-kompatibler-bild-endpunkt>
+OPEN_WEBUI_IMAGES_OPENAI_API_KEY=<dein-api-key>
+```
 
 ## Optionaler OCR-Zusatz
 

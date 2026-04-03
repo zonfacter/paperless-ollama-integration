@@ -243,9 +243,13 @@ services:
       - ./.env
     environment:
       OLLAMA_HOST: ${OLLAMA_HOST}
-      OLLAMA_INTEL_GPU: ${OLLAMA_INTEL_GPU:-1}
       OLLAMA_VULKAN: ${OLLAMA_VULKAN:-1}
       OLLAMA_FLASH_ATTENTION: ${OLLAMA_FLASH_ATTENTION:-0}
+      HSA_OVERRIDE_GFX_VERSION: ${OLLAMA_HSA_OVERRIDE_GFX_VERSION:-9.0.6}
+      DRI_PRIME: ${OLLAMA_DRI_PRIME:-pci-0000_04_00_0!}
+      MESA_VK_DEVICE_SELECT: ${OLLAMA_MESA_VK_DEVICE_SELECT:-1002:66a1!}
+      HIP_VISIBLE_DEVICES: ${OLLAMA_HIP_VISIBLE_DEVICES:-0}
+      ROCR_VISIBLE_DEVICES: ${OLLAMA_ROCR_VISIBLE_DEVICES:-0}
     healthcheck:
       test: ["CMD-SHELL", "ollama list >/dev/null 2>&1"]
       interval: 30s
@@ -255,7 +259,11 @@ services:
       - "${OLLAMA_BIND_HOST:-127.0.0.1}:${OLLAMA_PUBLIC_PORT:-11434}:11434"
     volumes:
       - ./data/ollama:/root/.ollama
+    group_add:
+      - "${OLLAMA_RENDER_GID:-105}"
+      - "${OLLAMA_VIDEO_GID:-44}"
     devices:
+      - /dev/kfd:/dev/kfd
       - /dev/dri:/dev/dri
     networks:
       - paperless-ai
@@ -296,6 +304,8 @@ services:
       - ./prompts:/usr/src/paperless-ai/prompts:ro
       - ./scripts:/usr/src/paperless-ai/scripts:ro
       - ./config:/usr/src/paperless-ai/config:ro
+      - /sys:/host_sys:${PAPERLESS_HOST_SYS_MOUNT_MODE:-rw}
+      - /var/run/docker.sock:/var/run/docker.sock
       - ./web:/app/web:ro
       - ./web/server.py:/app/server.py:ro
     networks:
@@ -303,7 +313,12 @@ services:
 
   open-webui:
     profiles: ["chat-ui"]
-    image: ghcr.io/open-webui/open-webui:${OPEN_WEBUI_IMAGE_TAG:-v0.8.12}
+    build:
+      context: .
+      dockerfile: docker/open-webui/Dockerfile
+      args:
+        OPEN_WEBUI_IMAGE_TAG: ${OPEN_WEBUI_IMAGE_TAG:-v0.8.12}
+    image: paperless-open-webui:${OPEN_WEBUI_IMAGE_TAG:-v0.8.12}
     container_name: paperless-open-webui
     restart: unless-stopped
     cpus: "${OPEN_WEBUI_CPUS:-2.00}"
@@ -314,11 +329,26 @@ services:
     environment:
       WEBUI_URL: ${OPEN_WEBUI_URL:-http://localhost:8081}
       WEBUI_SECRET_KEY: ${OPEN_WEBUI_SECRET_KEY:-CHANGE_ME_OPEN_WEBUI_SECRET}
+      OPEN_WEBUI_WORKSPACE_ROOT: ${OPEN_WEBUI_WORKSPACE_ROOT:-/workspace/project}
       ENABLE_OLLAMA_API: ${OPEN_WEBUI_ENABLE_OLLAMA_API:-true}
       OLLAMA_BASE_URL: ${OPEN_WEBUI_OLLAMA_BASE_URL:-http://ollama:11434}
       ENABLE_OPENAI_API: ${OPEN_WEBUI_ENABLE_OPENAI_API:-true}
       OPENAI_API_BASE_URL: ${OPEN_WEBUI_OPENAI_API_BASE_URL:-http://llama-cpp:8080/v1}
       OPENAI_API_KEY: ${OPEN_WEBUI_OPENAI_API_KEY:-dummy}
+      ENABLE_IMAGE_GENERATION: ${OPEN_WEBUI_ENABLE_IMAGE_GENERATION:-false}
+      ENABLE_IMAGE_PROMPT_GENERATION: ${OPEN_WEBUI_ENABLE_IMAGE_PROMPT_GENERATION:-false}
+      IMAGE_GENERATION_ENGINE: ${OPEN_WEBUI_IMAGE_GENERATION_ENGINE:-openai}
+      IMAGE_GENERATION_MODEL: ${OPEN_WEBUI_IMAGE_GENERATION_MODEL:-gpt-image-1}
+      IMAGE_SIZE: ${OPEN_WEBUI_IMAGE_SIZE:-1024x1024}
+      IMAGES_OPENAI_API_BASE_URL: ${OPEN_WEBUI_IMAGES_OPENAI_API_BASE_URL:-http://openvino-image:8000/v3}
+      IMAGES_OPENAI_API_KEY: ${OPEN_WEBUI_IMAGES_OPENAI_API_KEY:-dummy}
+      AUTOMATIC1111_BASE_URL: ${OPEN_WEBUI_AUTOMATIC1111_BASE_URL:-}
+      AUTOMATIC1111_API_AUTH: ${OPEN_WEBUI_AUTOMATIC1111_API_AUTH:-}
+      COMFYUI_BASE_URL: ${OPEN_WEBUI_COMFYUI_BASE_URL:-http://comfyui-amd:8188}
+      COMFYUI_API_KEY: ${OPEN_WEBUI_COMFYUI_API_KEY:-}
+      COMFYUI_WORKFLOW: ${OPEN_WEBUI_COMFYUI_WORKFLOW:-}
+      OPEN_WEBUI_COMFYUI_WORKFLOW_FILE: ${OPEN_WEBUI_COMFYUI_WORKFLOW_FILE:-/opt/paperless-open-webui/workflows/comfyui_txt2img_api.json}
+      OPEN_WEBUI_COMFYUI_WORKFLOW_NODES_FILE: ${OPEN_WEBUI_COMFYUI_WORKFLOW_NODES_FILE:-/opt/paperless-open-webui/workflows/comfyui_txt2img_nodes.json}
       # RAG / file upload
       RAG_EMBEDDING_ENGINE: ${OPEN_WEBUI_RAG_EMBEDDING_ENGINE:-ollama}
       RAG_EMBEDDING_MODEL: ${OPEN_WEBUI_RAG_EMBEDDING_MODEL:-nomic-embed-text:latest}
@@ -328,14 +358,87 @@ services:
       CHUNK_OVERLAP: ${OPEN_WEBUI_CHUNK_OVERLAP:-150}
       RAG_TOP_K: ${OPEN_WEBUI_RAG_TOP_K:-5}
       ENABLE_RAG_HYBRID_SEARCH: ${OPEN_WEBUI_ENABLE_RAG_HYBRID_SEARCH:-True}
-      # Tika für Dokumenten-Extraktion (bereits im Stack vorhanden)
-      # "tika" = Apache Tika Full (mit Tesseract OCR für gescannte PDFs)
+      # PaddleOCR-Proxy für gescannte PDFs (bessere Qualität als Tesseract)
       CONTENT_EXTRACTION_ENGINE: ${OPEN_WEBUI_CONTENT_EXTRACTION_ENGINE:-tika}
-      TIKA_SERVER_URL: ${OPEN_WEBUI_TIKA_SERVER_URL:-http://tika:9998}
+      TIKA_SERVER_URL: ${OPEN_WEBUI_TIKA_SERVER_URL:-http://tika-ocr-proxy:9998}
     ports:
       - "${OPEN_WEBUI_BIND_HOST:-0.0.0.0}:${OPEN_WEBUI_PUBLIC_PORT:-8081}:8080"
     volumes:
       - ./data/open-webui:/app/backend/data
+      - ${OPEN_WEBUI_WORKSPACE_HOST_PATH:-.}:${OPEN_WEBUI_WORKSPACE_ROOT:-/workspace/project}:rw
+    networks:
+      - paperless-ai
+
+  openvino-image:
+    profiles: ["image-intel"]
+    image: openvino/model_server:${OPENVINO_IMAGE_TAG:-latest-gpu}
+    container_name: paperless-openvino-image
+    restart: unless-stopped
+    cpus: "${OPENVINO_IMAGE_CPUS:-4.00}"
+    mem_limit: "${OPENVINO_IMAGE_MEM_LIMIT:-12g}"
+    environment:
+      no_proxy: ${no_proxy:-}
+      NO_PROXY: ${NO_PROXY:-}
+      http_proxy: ${http_proxy:-}
+      https_proxy: ${https_proxy:-}
+      HTTP_PROXY: ${HTTP_PROXY:-}
+      HTTPS_PROXY: ${HTTPS_PROXY:-}
+    command:
+      - --rest_port
+      - "8000"
+      - --model_repository_path
+      - /models
+      - --task
+      - image_generation
+      - --source_model
+      - ${OPENVINO_IMAGE_SOURCE_MODEL:-OpenVINO/stable-diffusion-v1-5-int8-ov}
+      - --target_device
+      - ${OPENVINO_IMAGE_TARGET_DEVICE:-GPU}
+    expose:
+      - "8000"
+    volumes:
+      - ./data/openvino-image-models:/models:rw
+    devices:
+      - /dev/dri:/dev/dri
+    group_add:
+      - "${OLLAMA_RENDER_GID:-105}"
+    networks:
+      - paperless-ai
+
+  comfyui-amd:
+    profiles: ["image-amd"]
+    build:
+      context: .
+      dockerfile: docker/comfyui-amd/Dockerfile
+      args:
+        ROCM_PYTORCH_IMAGE: ${COMFYUI_AMD_ROCM_PYTORCH_IMAGE:-rocm/pytorch:latest}
+        COMFYUI_REF: ${COMFYUI_AMD_REF:-master}
+    image: paperless-comfyui-amd:${COMFYUI_AMD_IMAGE_TAG:-latest}
+    container_name: paperless-comfyui-amd
+    restart: unless-stopped
+    cpus: "${COMFYUI_AMD_CPUS:-6.00}"
+    mem_limit: "${COMFYUI_AMD_MEM_LIMIT:-16g}"
+    environment:
+      HSA_OVERRIDE_GFX_VERSION: ${COMFYUI_AMD_HSA_OVERRIDE_GFX_VERSION:-9.0.6}
+      HIP_VISIBLE_DEVICES: ${COMFYUI_AMD_HIP_VISIBLE_DEVICES:-0}
+      ROCR_VISIBLE_DEVICES: ${COMFYUI_AMD_ROCR_VISIBLE_DEVICES:-0}
+      PYTORCH_HIP_ALLOC_CONF: ${COMFYUI_AMD_PYTORCH_HIP_ALLOC_CONF:-expandable_segments:True}
+      COMFYUI_PORT: ${COMFYUI_AMD_PORT:-8188}
+      COMFYUI_LISTEN: ${COMFYUI_AMD_LISTEN:-0.0.0.0}
+      COMFYUI_EXTRA_ARGS: ${COMFYUI_AMD_EXTRA_ARGS:---disable-auto-launch}
+    expose:
+      - "8188"
+    volumes:
+      - ./data/comfyui/models:/opt/ComfyUI/models
+      - ./data/comfyui/input:/opt/ComfyUI/input
+      - ./data/comfyui/output:/opt/ComfyUI/output
+      - ./data/comfyui/custom_nodes:/opt/ComfyUI/custom_nodes
+    group_add:
+      - "${OLLAMA_RENDER_GID:-105}"
+      - "${OLLAMA_VIDEO_GID:-44}"
+    devices:
+      - /dev/kfd:/dev/kfd
+      - /dev/dri:/dev/dri
     networks:
       - paperless-ai
 

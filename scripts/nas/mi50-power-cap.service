@@ -1,0 +1,13 @@
+[Unit]
+Description=Apply AMD MI50 power cap
+After=multi-user.target
+
+[Service]
+Type=oneshot
+EnvironmentFile=-/volume1/docker/paperless-ai/paperless-ollama-integration/data/paperless-ai-web/mi50-power-cap.env
+Environment=AMD_GPU_CARD=auto
+Environment=AMD_GPU_POWER_CAP_WATTS=150
+ExecStart=/usr/local/sbin/apply-amd-power-cap.sh
+
+[Install]
+WantedBy=multi-user.target

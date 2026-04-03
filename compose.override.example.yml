@@ -1,12 +1,17 @@
 services:
   ollama:
-    # Optional spaeter fuer echte iGPU-/GPU-Tests auf dem NAS:
-    # devices:
-    #   - /dev/dri:/dev/dri
     environment:
       OLLAMA_NUM_PARALLEL: "1"
+      # Optional fuer abweichende Host-Gruppen:
+      # OLLAMA_RENDER_GID: "105"
+      # OLLAMA_VIDEO_GID: "44"
 
   paperless-ai-web:
     environment:
       PAPERLESS_AI_WEB_THEME: "default"
 
+  open-webui:
+    environment:
+      # Optional fuer abweichenden Workspace-Mount:
+      # OPEN_WEBUI_WORKSPACE_HOST_PATH: "/volume1/docker/paperless-ai/paperless-ollama-integration"
+      # OPEN_WEBUI_WORKSPACE_ROOT: "/workspace/project"

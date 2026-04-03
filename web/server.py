@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 import base64
 import html
+import http.client
 import json
 import importlib.util
 import math
@@ -15,6 +16,8 @@ import urllib.error
 import urllib.parse
 import urllib.request
 import uuid
+import socket
+from collections import deque
 from pathlib import Path
 from http.server import BaseHTTPRequestHandler
 from http.server import ThreadingHTTPServer
@@ -31,6 +34,8 @@ PREVIEW_CONFIG_PATH = os.getenv("PAPERLESS_PREVIEW_CONFIG_PATH", "/home/thomas/o
 BACKFILL_STATE_PATH = os.getenv("PAPERLESS_BACKFILL_STATE_PATH", "/home/thomas/ollama-web/backfill_jobs.json")
 PROVIDER_CONFIG_PATH = os.getenv("PAPERLESS_PROVIDER_CONFIG_PATH", "/home/thomas/ollama-web/provider_config.json")
 MODEL_CONFIG_PATH = os.getenv("PAPERLESS_MODEL_CONFIG_PATH", "/home/thomas/ollama-web/model_config.json")
+HOST_SYS_ROOT = Path(os.getenv("PAPERLESS_HOST_SYS_ROOT", "/host_sys"))
+DOCKER_SOCKET_PATH = Path(os.getenv("PAPERLESS_DOCKER_SOCKET_PATH", "/var/run/docker.sock"))
 PADDLEOCR_API_INSTALL_SCRIPT = os.getenv(
     "PADDLEOCR_API_INSTALL_SCRIPT",
     "/home/hytale/paperless-ollama-integration/scripts/install-paddleocr-api.sh",
@@ -40,6 +45,51 @@ PREVIEW_JOBS_LOCK = threading.Lock()
 BACKFILL_JOBS: dict[str, dict] = {}
 BACKFILL_JOBS_LOCK = threading.Lock()
 BACKFILL_LATEST_JOB_ID: str | None = None
+SYSTEM_HISTORY_SAMPLES = max(int(os.getenv("PAPERLESS_SYSTEM_HISTORY_SAMPLES", "600") or "600"), 10)
+SYSTEM_HISTORY_INTERVAL_SECONDS = max(float(os.getenv("PAPERLESS_SYSTEM_HISTORY_INTERVAL_SECONDS", "1") or "1"), 0.5)
+GPU_WARN_TEMP_C = float(os.getenv("PAPERLESS_GPU_WARN_TEMP_C", "78") or "78")
+GPU_CRIT_TEMP_C = float(os.getenv("PAPERLESS_GPU_CRIT_TEMP_C", "84") or "84")
+GPU_WARN_POWER_CAP_UTIL_PERCENT = float(os.getenv("PAPERLESS_GPU_WARN_POWER_CAP_UTIL_PERCENT", "92") or "92")
+GPU_POWER_CAP_PRESETS = [
+    max(1, int(item.strip()))
+    for item in os.getenv("PAPERLESS_GPU_POWER_CAP_PRESETS", "90,120,150,170,190,225,250").split(",")
+    if item.strip()
+]
+GPU_POWER_CAP_STATE_PATH = Path(os.getenv("PAPERLESS_GPU_POWER_CAP_STATE_PATH", "/data/mi50-power-cap.env"))
+BENCHMARK_RESULTS_PATH = Path(os.getenv("PAPERLESS_BENCHMARK_RESULTS_PATH", "/data/mi50-benchmark-results.json"))
+STRESS_TEST_DEFAULT_MODEL = os.getenv("PAPERLESS_STRESS_TEST_DEFAULT_MODEL", "qwen2.5-coder:14b").strip() or "qwen2.5-coder:14b"
+STRESS_TEST_DEFAULT_DURATION_SECONDS = max(int(os.getenv("PAPERLESS_STRESS_TEST_DEFAULT_DURATION_SECONDS", "180") or "180"), 30)
+STRESS_TEST_DEFAULT_NUM_PREDICT = max(int(os.getenv("PAPERLESS_STRESS_TEST_DEFAULT_NUM_PREDICT", "512") or "512"), 64)
+STRESS_TEST_MAX_DURATION_SECONDS = max(int(os.getenv("PAPERLESS_STRESS_TEST_MAX_DURATION_SECONDS", "1800") or "1800"), 60)
+STRESS_TEST_MAX_NUM_PREDICT = max(int(os.getenv("PAPERLESS_STRESS_TEST_MAX_NUM_PREDICT", "1024") or "1024"), 128)
+STRESS_TEST_PROMPT = os.getenv(
+    "PAPERLESS_STRESS_TEST_PROMPT",
+    (
+        "Schreibe eine robuste Python-Funktion parse_nginx_logs(lines), die Combined Log Format Zeilen parst, "
+        "Statusklassen zaehlt, die Top-5 Pfade liefert und die mittlere Antwortzeit berechnet. "
+        "Gib vollstaendigen Code plus kurze Erklaerung und einfache Tests aus."
+    ),
+)
+SYSTEM_METRIC_HISTORY: deque[dict[str, object]] = deque(maxlen=SYSTEM_HISTORY_SAMPLES)
+SYSTEM_METRIC_HISTORY_LOCK = threading.Lock()
+SYSTEM_METRIC_SAMPLER_STARTED = False
+SYSTEM_METRIC_SAMPLER_LOCK = threading.Lock()
+STRESS_TEST_LOCK = threading.Lock()
+STRESS_TEST_STATE: dict[str, object] = {
+    "running": False,
+    "status": "idle",
+    "model": STRESS_TEST_DEFAULT_MODEL,
+    "duration_seconds": STRESS_TEST_DEFAULT_DURATION_SECONDS,
+    "num_predict": STRESS_TEST_DEFAULT_NUM_PREDICT,
+    "started_at": "",
+    "finished_at": "",
+    "stop_requested": False,
+    "iterations_completed": 0,
+    "last_error": "",
+    "last_result_tokens_per_s": None,
+    "last_result_seconds": None,
+    "history": {"max_temp_c": None, "max_power_watts": None, "max_gpu_busy_percent": None, "max_vram_percent": None},
+}
 
 
 HTML = """<!doctype html>
@@ -760,6 +810,235 @@ HTML = """<!doctype html>
       display: grid;
       gap: 8px;
     }
+    .trend-grid {
+      display: grid;
+      grid-template-columns: repeat(4, minmax(0, 1fr));
+      gap: 10px;
+      margin-top: 6px;
+    }
+    .alert-strip {
+      display: grid;
+      gap: 8px;
+      margin-bottom: 12px;
+    }
+    .alert-chip {
+      border-radius: 16px;
+      padding: 10px 12px;
+      border: 1px solid rgba(16, 24, 40, 0.08);
+      font-size: 13px;
+      font-weight: 600;
+    }
+    .alert-chip.info {
+      background: rgba(11, 107, 203, 0.08);
+      color: #0b4a88;
+    }
+    .alert-chip.warn {
+      background: rgba(245, 158, 11, 0.12);
+      color: #9a6700;
+    }
+    .alert-chip.crit {
+      background: rgba(220, 38, 38, 0.12);
+      color: #991b1b;
+    }
+    .power-cap-controls {
+      display: grid;
+      gap: 10px;
+      margin-bottom: 12px;
+      padding: 12px;
+      border: 1px solid var(--line);
+      border-radius: 18px;
+      background: rgba(248,250,252,0.95);
+    }
+    .power-cap-head {
+      display: flex;
+      justify-content: space-between;
+      gap: 12px;
+      align-items: center;
+      flex-wrap: wrap;
+    }
+    .power-cap-title {
+      font-size: 12px;
+      color: var(--muted);
+      text-transform: uppercase;
+      letter-spacing: 0.08em;
+      font-weight: 700;
+    }
+    .power-cap-actions {
+      display: flex;
+      gap: 10px;
+      flex-wrap: wrap;
+    }
+    .power-cap-btn {
+      min-width: 84px;
+      padding: 10px 14px;
+      border-radius: 14px;
+      box-shadow: none;
+    }
+    .power-cap-btn.active {
+      background: linear-gradient(135deg, #0e9f6e, #2fb786);
+      box-shadow: 0 12px 24px rgba(14, 159, 110, 0.18);
+    }
+    .power-cap-btn small {
+      display: block;
+      margin-top: 3px;
+      font-size: 11px;
+      opacity: 0.82;
+    }
+    .power-cap-note {
+      color: var(--muted);
+      font-size: 12px;
+      line-height: 1.5;
+    }
+    .system-section {
+      margin-top: 12px;
+      padding: 12px;
+      border: 1px solid var(--line);
+      border-radius: 18px;
+      background: rgba(248,250,252,0.95);
+      display: grid;
+      gap: 10px;
+    }
+    .system-section-head {
+      display: flex;
+      justify-content: space-between;
+      gap: 10px;
+      align-items: baseline;
+      flex-wrap: wrap;
+    }
+    .system-section-head h4 {
+      margin: 0;
+      font-size: 13px;
+      letter-spacing: 0.08em;
+      text-transform: uppercase;
+      color: var(--muted);
+    }
+    .system-section-sub {
+      color: var(--muted);
+      font-size: 12px;
+      line-height: 1.5;
+    }
+    .recommendation-grid {
+      display: grid;
+      grid-template-columns: repeat(3, minmax(0, 1fr));
+      gap: 10px;
+    }
+    .recommendation-card {
+      border: 1px solid var(--line);
+      border-radius: 14px;
+      background: rgba(255,255,255,0.88);
+      padding: 12px;
+      display: grid;
+      gap: 6px;
+    }
+    .recommendation-kicker {
+      font-size: 11px;
+      letter-spacing: 0.08em;
+      text-transform: uppercase;
+      color: var(--muted);
+      font-weight: 700;
+    }
+    .recommendation-title {
+      font-size: 16px;
+      font-weight: 700;
+    }
+    .recommendation-copy {
+      color: var(--muted);
+      font-size: 13px;
+      line-height: 1.45;
+    }
+    .benchmark-table-wrap {
+      overflow: auto;
+      border-radius: 14px;
+      border: 1px solid var(--line);
+      background: rgba(255,255,255,0.86);
+    }
+    .benchmark-table {
+      width: 100%;
+      border-collapse: collapse;
+      font-size: 13px;
+    }
+    .benchmark-table th,
+    .benchmark-table td {
+      padding: 10px 12px;
+      text-align: left;
+      border-bottom: 1px solid rgba(16, 24, 40, 0.08);
+      white-space: nowrap;
+    }
+    .benchmark-table th {
+      font-size: 11px;
+      letter-spacing: 0.08em;
+      text-transform: uppercase;
+      color: var(--muted);
+      background: rgba(248,250,252,0.96);
+      position: sticky;
+      top: 0;
+    }
+    .benchmark-table td:first-child,
+    .benchmark-table th:first-child {
+      white-space: normal;
+      min-width: 210px;
+    }
+    .stress-grid {
+      display: grid;
+      grid-template-columns: 1.25fr 1fr;
+      gap: 12px;
+    }
+    .stress-actions {
+      display: flex;
+      gap: 10px;
+      flex-wrap: wrap;
+      align-items: end;
+    }
+    .stress-actions .field {
+      min-width: 160px;
+      flex: 1 1 160px;
+    }
+    .stress-summary {
+      display: grid;
+      gap: 8px;
+    }
+    .trend-card {
+      border: 1px solid var(--line);
+      border-radius: 18px;
+      background: rgba(248,250,252,0.95);
+      padding: 10px 12px;
+      display: grid;
+      gap: 6px;
+    }
+    .trend-head {
+      display: flex;
+      align-items: baseline;
+      justify-content: space-between;
+      gap: 10px;
+    }
+    .trend-title {
+      font-size: 12px;
+      color: var(--muted);
+      text-transform: uppercase;
+      letter-spacing: 0.08em;
+      font-weight: 700;
+    }
+    .trend-value {
+      font-size: 14px;
+      font-weight: 700;
+      color: var(--ink);
+    }
+    .trend-svg {
+      width: 100%;
+      height: 76px;
+      display: block;
+    }
+    .trend-empty {
+      min-height: 76px;
+      display: grid;
+      place-items: center;
+      color: var(--muted);
+      font-size: 12px;
+    }
+    .trend-foot {
+      color: var(--muted);
+      font-size: 11px;
+    }
     .meta-row {
       display: grid;
       gap: 2px;
@@ -852,6 +1131,9 @@ HTML = """<!doctype html>
       .controls-row,
       .config-grid,
       .detail-grid,
+      .recommendation-grid,
+      .trend-grid,
+      .stress-grid,
       .provider-split,
       .provider-diagram {
         grid-template-columns: 1fr;
@@ -911,6 +1193,10 @@ HTML = """<!doctype html>
             <button class="nav-btn" data-view-target="tasks-view" type="button">
               Task Manager
               <small>Hintergrundjobs, Laufstatus und Logs ohne Shell verfolgen.</small>
+            </button>
+            <button class="nav-btn" data-view-target="ollama-view" type="button">
+              Ollama Runner
+              <small>Aktive Runner ueberwachen und den Dienst gezielt neu starten.</small>
             </button>
             <button class="nav-btn" data-view-target="models-view" type="button">
               Modelle
@@ -1198,6 +1484,68 @@ HTML = """<!doctype html>
                       <button id="tasks-delete-selected" class="secondary">Aus Task Manager entfernen</button>
                     </div>
                     <div id="tasks-detail-log" class="logbox">Bereit.</div>
+                  </div>
+                </div>
+              </div>
+            </section>
+            <section id="ollama-view" class="view">
+              <div class="section">
+                <div class="section-head">
+                  <div>
+                    <h2>Ollama Runner</h2>
+                    <p>
+                      Beobachte aktive Runner, Containerstatus und letzte Probleme direkt in der Weboberflaeche.
+                      Bei haengenden Modellen kannst du den Ollama-Dienst hier gezielt resetten.
+                    </p>
+                  </div>
+                  <div class="summary-bar">
+                    <span class="pill">Runner</span>
+                    <span class="pill">Reset</span>
+                    <span class="pill">Ohne Shell</span>
+                  </div>
+                </div>
+                <div class="provider-diagram">
+                  <div class="flow-node active">
+                    <strong>Status</strong>
+                    <span>Container, Health und aktive Runner auf einen Blick.</span>
+                  </div>
+                  <div class="flow-arrow">→</div>
+                  <div class="flow-node active">
+                    <strong>Erkennung</strong>
+                    <span>Helfer fuer haengende Modelle, hohe Last und Stopping-Zustaende.</span>
+                  </div>
+                  <div class="flow-arrow">→</div>
+                  <div class="flow-node active">
+                    <strong>Reset</strong>
+                    <span>Neustart von <code>paperless-ollama</code>, falls ein Runner nicht sauber endet.</span>
+                  </div>
+                </div>
+                <div class="actions">
+                  <button id="ollama-runner-refresh" class="secondary">Runner aktualisieren</button>
+                  <button id="ollama-runner-reset" class="secondary">Ollama resetten</button>
+                </div>
+                <div id="ollama-runner-status" class="statusline">Runner-Status wird geladen...</div>
+                <div class="detail-grid">
+                  <div class="detail-card">
+                    <h3>Status</h3>
+                    <div class="detail-sub">Containerzustand, Health, Anzahl aktiver Runner und erkannte Hinweise.</div>
+                    <div id="ollama-runner-meta" class="meta-table">
+                      <div class="doc-empty">Statusdaten werden geladen...</div>
+                    </div>
+                  </div>
+                  <div class="detail-card">
+                    <h3>Aktive Runner</h3>
+                    <div class="detail-sub">Modelle aus <code>/api/ps</code> inklusive Processor, VRAM und Ablaufzeit.</div>
+                    <div id="ollama-runner-list" class="doc-list">
+                      <div class="doc-empty">Noch keine aktiven Runner.</div>
+                    </div>
+                  </div>
+                </div>
+                <div class="detail-grid">
+                  <div class="detail-card">
+                    <h3>Reset-Ausgabe</h3>
+                    <div class="detail-sub">Letzte Rueckmeldung des Neustarts. Nuetzlich, wenn der Runner haengt oder Open WebUI traege wirkt.</div>
+                    <div id="ollama-runner-log" class="logbox">Bereit.</div>
                   </div>
                 </div>
               </div>
@@ -1863,6 +2211,12 @@ HTML = """<!doctype html>
     const testProviderConfigBtn = document.getElementById('test-provider-config');
     const providerConfigStatusEl = document.getElementById('provider-config-status');
     const providerTestOutputEl = document.getElementById('provider-test-output');
+    const ollamaRunnerRefreshBtn = document.getElementById('ollama-runner-refresh');
+    const ollamaRunnerResetBtn = document.getElementById('ollama-runner-reset');
+    const ollamaRunnerStatusEl = document.getElementById('ollama-runner-status');
+    const ollamaRunnerMetaEl = document.getElementById('ollama-runner-meta');
+    const ollamaRunnerListEl = document.getElementById('ollama-runner-list');
+    const ollamaRunnerLogEl = document.getElementById('ollama-runner-log');
     const navButtons = Array.from(document.querySelectorAll('[data-view-target]'));
     const views = Array.from(document.querySelectorAll('.view'));
     const layoutSidebarBtn = document.getElementById('layout-sidebar');
@@ -1983,6 +2337,185 @@ HTML = """<!doctype html>
       if (value === null || value === undefined || value === '') return '-';
       if (Array.isArray(value)) return value.length ? value.join(', ') : '-';
       return String(value);
+    }
+
+    function formatTrendNumber(value, suffix = '') {
+      if (value === null || value === undefined || Number.isNaN(Number(value))) return 'n/a';
+      const numeric = Number(value);
+      const rounded = Math.abs(numeric) >= 100 ? Math.round(numeric) : Math.round(numeric * 10) / 10;
+      return `${rounded}${suffix}`;
+    }
+
+    function escapeHtml(value) {
+      return String(value ?? '')
+        .replaceAll('&', '&amp;')
+        .replaceAll('<', '&lt;')
+        .replaceAll('>', '&gt;')
+        .replaceAll('"', '&quot;')
+        .replaceAll("'", '&#39;');
+    }
+
+    function renderTrendSvg(points, color) {
+      const valid = points
+        .map((point, index) => ({ index, value: Number(point) }))
+        .filter((point) => Number.isFinite(point.value));
+      if (!valid.length) {
+        return '<div class="trend-empty">Noch keine Trenddaten</div>';
+      }
+      const width = 320;
+      const height = 76;
+      const padding = 8;
+      const min = Math.min(...valid.map((point) => point.value));
+      const max = Math.max(...valid.map((point) => point.value));
+      const span = Math.max(max - min, 1);
+      const denominator = Math.max(points.length - 1, 1);
+      const coords = valid.map((point) => {
+        const x = padding + ((width - padding * 2) * point.index) / denominator;
+        const y = height - padding - ((point.value - min) / span) * (height - padding * 2);
+        return `${x.toFixed(1)},${y.toFixed(1)}`;
+      });
+      const area = [`${padding},${height - padding}`, ...coords, `${width - padding},${height - padding}`].join(' ');
+      return `
+        <svg class="trend-svg" viewBox="0 0 ${width} ${height}" preserveAspectRatio="none" aria-hidden="true">
+          <polyline points="${coords.join(' ')}" fill="none" stroke="${color}" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"></polyline>
+          <polygon points="${area}" fill="${color}" opacity="0.12"></polygon>
+        </svg>
+      `;
+    }
+
+    function renderTrendCard(title, latestValue, points, color, suffix, footer) {
+      return `
+        <div class="trend-card">
+          <div class="trend-head">
+            <div class="trend-title">${escapeHtml(title)}</div>
+            <div class="trend-value">${escapeHtml(formatTrendNumber(latestValue, suffix))}</div>
+          </div>
+          ${renderTrendSvg(points, color)}
+          <div class="trend-foot">${escapeHtml(footer)}</div>
+        </div>
+      `;
+    }
+
+    function renderGpuCards(cards) {
+      if (!cards.length) {
+        return '';
+      }
+      return `
+        <div class="system-section">
+          <div class="system-section-head">
+            <h4>GPU Karten</h4>
+            <div class="system-section-sub">Live-Sicht auf jede erkannte GPU bzw. iGPU im Host.</div>
+          </div>
+          <div class="benchmark-table-wrap">
+            <table class="benchmark-table">
+              <thead>
+                <tr>
+                  <th>Karte</th>
+                  <th>Typ</th>
+                  <th>Temp</th>
+                  <th>Power</th>
+                  <th>Busy</th>
+                  <th>VRAM</th>
+                  <th>Treiber</th>
+                </tr>
+              </thead>
+              <tbody>
+                ${cards.map((card) => `
+                  <tr>
+                    <td>${escapeHtml(String(card.card || ''))}</td>
+                    <td>${escapeHtml(`${String(card.vendor || 'GPU')} ${String(card.device_id || '').trim()}`.trim())}</td>
+                    <td>${escapeHtml(benchmarkValue(card.temperature_c, ' °C'))}</td>
+                    <td>${escapeHtml(benchmarkValue(card.power_watts, ' W'))}</td>
+                    <td>${escapeHtml(benchmarkValue(card.gpu_busy_percent, ' %'))}</td>
+                    <td>${escapeHtml(card.vram_total_human ? `${benchmarkValue(card.vram_used_human)} / ${benchmarkValue(card.vram_total_human)}${card.vram_percent !== null && card.vram_percent !== undefined ? ` (${benchmarkValue(card.vram_percent, ' %')})` : ''}` : 'n/a')}</td>
+                    <td>${escapeHtml(String(card.driver || 'n/a'))}</td>
+                  </tr>
+                `).join('')}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      `;
+    }
+
+    function benchmarkValue(value, suffix = '') {
+      if (value === null || value === undefined || Number.isNaN(Number(value))) return 'n/a';
+      return `${formatValue(value)}${suffix}`;
+    }
+
+    function renderBenchmarkTable(rows) {
+      if (!rows.length) {
+        return '<div class="doc-empty">Noch keine Benchmarkdaten vorhanden.</div>';
+      }
+      return `
+        <div class="benchmark-table-wrap">
+          <table class="benchmark-table">
+            <thead>
+              <tr>
+                <th>Modell</th>
+                <th>tok/s</th>
+                <th>Wall</th>
+                <th>Load</th>
+                <th>Power-Cap</th>
+              </tr>
+            </thead>
+            <tbody>
+              ${rows.map((row) => `
+                <tr>
+                  <td>${escapeHtml(String(row.model || ''))}</td>
+                  <td>${escapeHtml(benchmarkValue(row.tokens_per_s))}</td>
+                  <td>${escapeHtml(benchmarkValue(row.elapsed_wall_s, ' s'))}</td>
+                  <td>${escapeHtml(benchmarkValue(row.load_s, ' s'))}</td>
+                  <td>${escapeHtml(benchmarkValue(row.power_cap_watts, ' W'))}</td>
+                </tr>
+              `).join('')}
+            </tbody>
+          </table>
+        </div>
+      `;
+    }
+
+    function renderPowerSweepTable(blocks) {
+      if (!blocks.length) return '';
+      return blocks.map((block) => `
+        <div class="benchmark-table-wrap">
+          <table class="benchmark-table">
+            <thead>
+              <tr>
+                <th colspan="5">${escapeHtml(String(block.model || 'Power Sweep'))}</th>
+              </tr>
+              <tr>
+                <th>Stufe</th>
+                <th>Power-Cap</th>
+                <th>tok/s</th>
+                <th>Wall</th>
+                <th>Load</th>
+              </tr>
+            </thead>
+            <tbody>
+              ${(Array.isArray(block.runs) ? block.runs : []).map((run) => `
+                <tr>
+                  <td>${escapeHtml(String(run.power_label || 'Profil'))}</td>
+                  <td>${escapeHtml(benchmarkValue(run.power_cap_watts, ' W'))}</td>
+                  <td>${escapeHtml(benchmarkValue(run.tokens_per_s))}</td>
+                  <td>${escapeHtml(benchmarkValue(run.elapsed_wall_s, ' s'))}</td>
+                  <td>${escapeHtml(benchmarkValue(run.load_s, ' s'))}</td>
+                </tr>
+              `).join('')}
+            </tbody>
+          </table>
+        </div>
+      `).join('');
+    }
+
+    function stressStatusBadge(status) {
+      const normalized = String(status || 'idle').toLowerCase();
+      if (normalized === 'running') return '<span class="status-badge running">running</span>';
+      if (normalized === 'done') return '<span class="status-badge done">done</span>';
+      if (normalized === 'stopping') return '<span class="status-badge starting">stopping</span>';
+      if (normalized === 'stopped') return '<span class="status-badge error">stopped</span>';
+      if (normalized === 'error') return '<span class="status-badge error">error</span>';
+      return '<span class="status-badge">idle</span>';
     }
 
     function syncFallbackUi() {
@@ -2958,18 +3491,342 @@ HTML = """<!doctype html>
         const res = await fetch('/api/system/metrics');
         const data = await res.json();
         if (!res.ok) throw new Error(data.error || 'Fehler');
+        const cards = data.gpu && Array.isArray(data.gpu.cards) ? data.gpu.cards : [];
+        const primaryGpu = cards.length ? cards[0] : null;
+        const runtimeModels = data.gpu && Array.isArray(data.gpu.runtime_models) ? data.gpu.runtime_models : [];
+        const history = data.history && Array.isArray(data.history.points) ? data.history.points : [];
+        const alerts = data.gpu && Array.isArray(data.gpu.alerts) ? data.gpu.alerts : [];
+        const benchmarks = data.benchmarks && typeof data.benchmarks === 'object' ? data.benchmarks : {};
+        const stressTest = data.stress_test && typeof data.stress_test === 'object' ? data.stress_test : {};
+        const stressDefaults = data.stress_test_defaults && typeof data.stress_test_defaults === 'object' ? data.stress_test_defaults : {};
         const gpuSummary = data.gpu && data.gpu.available
           ? `${data.gpu.label || 'GPU erkannt'}${data.gpu.devices && data.gpu.devices.length ? ` · ${data.gpu.devices.join(', ')}` : ''}`
           : (data.gpu && data.gpu.note) || 'Keine nutzbare GPU in dieser VM sichtbar';
+        const gpuTemperature = primaryGpu && primaryGpu.temperature_c !== null && primaryGpu.temperature_c !== undefined
+          ? `${formatValue(primaryGpu.temperature_c)} °C`
+          : 'n/a';
+        const gpuPower = primaryGpu && primaryGpu.power_watts !== null && primaryGpu.power_watts !== undefined
+          ? `${formatValue(primaryGpu.power_watts)} W`
+          : 'n/a';
+        const gpuBusy = primaryGpu && primaryGpu.gpu_busy_percent !== null && primaryGpu.gpu_busy_percent !== undefined
+          ? `${formatValue(primaryGpu.gpu_busy_percent)} %`
+          : 'n/a';
+        const gpuVram = primaryGpu && primaryGpu.vram_total_human
+          ? `${formatValue(primaryGpu.vram_used_human)} / ${formatValue(primaryGpu.vram_total_human)}${primaryGpu.vram_percent !== null && primaryGpu.vram_percent !== undefined ? ` (${formatValue(primaryGpu.vram_percent)} %)` : ''}`
+          : 'n/a';
+        const gpuLink = primaryGpu && (primaryGpu.link_speed || primaryGpu.link_width)
+          ? `${formatValue(primaryGpu.link_speed || 'n/a')} · ${formatValue(primaryGpu.link_width || 'n/a')}`
+          : 'n/a';
+        const gpuDriver = primaryGpu
+          ? `${formatValue(primaryGpu.vendor || 'GPU')} ${formatValue(primaryGpu.device_id || '').trim()}${primaryGpu.driver ? ` · ${primaryGpu.driver}` : ''}`
+          : 'n/a';
+        const gpuPowerCap = primaryGpu && primaryGpu.power_cap_watts !== null && primaryGpu.power_cap_watts !== undefined
+          ? `${formatValue(primaryGpu.power_cap_watts)} W${primaryGpu.power_cap_util_percent !== null && primaryGpu.power_cap_util_percent !== undefined ? ` (${formatValue(primaryGpu.power_cap_util_percent)} % genutzt)` : ''}`
+          : 'n/a';
+        const gpuFan = primaryGpu && (primaryGpu.fan_rpm !== null && primaryGpu.fan_rpm !== undefined || primaryGpu.fan_pwm !== null && primaryGpu.fan_pwm !== undefined)
+          ? `${primaryGpu.fan_rpm !== null && primaryGpu.fan_rpm !== undefined ? `${formatValue(primaryGpu.fan_rpm)} rpm` : 'rpm n/a'}${primaryGpu.fan_pwm !== null && primaryGpu.fan_pwm !== undefined ? ` · PWM ${formatValue(primaryGpu.fan_pwm)}` : ''}`
+          : 'n/a';
+        const runtimeSummary = runtimeModels.length
+          ? runtimeModels.map((model) => `${formatValue(model.name)} (${formatValue(model.processor || 'unbekannt')})`).join(' · ')
+          : 'Kein Ollama-Modell aktiv';
+        const powerPresets = Array.isArray(data.gpu && data.gpu.power_cap_presets) ? data.gpu.power_cap_presets : [];
+        const activePowerCap = primaryGpu && primaryGpu.power_cap_watts !== null && primaryGpu.power_cap_watts !== undefined
+          ? Number(primaryGpu.power_cap_watts)
+          : null;
+        const alertHtml = alerts.length
+          ? `<div class="alert-strip">${alerts.map((alert) => `<div class="alert-chip ${escapeHtml(String(alert.level || 'info'))}">${escapeHtml(String(alert.message || 'Hinweis'))}</div>`).join('')}</div>`
+          : `<div class="alert-strip"><div class="alert-chip info">GPU-Sampling: alle ${formatValue(data.history && data.history.sample_interval_seconds)} s, Ringpuffer ${formatValue(data.history && data.history.window_minutes)} min.</div></div>`;
+        const powerCapControlsHtml = powerPresets.length
+          ? `
+            <div class="power-cap-controls">
+              <div class="power-cap-head">
+                <div>
+                  <div class="power-cap-title">MI50 Leistungsstufe</div>
+                  <div class="power-cap-note">Sofort wirksam und fuer den naechsten Boot gespeichert.</div>
+                </div>
+                <div class="power-cap-note">Aktiv: ${activePowerCap !== null ? `${formatValue(activePowerCap)} W` : 'n/a'}</div>
+              </div>
+              <div class="power-cap-actions">
+                ${powerPresets.map((preset) => {
+                  const watts = Number(preset.watts);
+                  return `<button class="power-cap-btn ${activePowerCap === watts ? 'active' : 'secondary'}" data-gpu-power-cap="${escapeHtml(String(watts))}">${escapeHtml(String(preset.label || 'Profil'))}<small>${escapeHtml(String(watts))} W</small></button>`;
+                }).join('')}
+              </div>
+            </div>
+          `
+          : '';
+        const trendHtml = `
+          <div class="trend-grid">
+            ${renderTrendCard('GPU-Last', primaryGpu ? primaryGpu.gpu_busy_percent : null, history.map((point) => point.gpu_busy_percent), '#0b6bcb', '%', `Ringpuffer ${formatValue(data.history && data.history.window_minutes)} min`)}
+            ${renderTrendCard('GPU-VRAM', primaryGpu ? primaryGpu.vram_percent : null, history.map((point) => point.gpu_vram_percent), '#0e9f6e', '%', 'Belegter VRAM-Anteil')}
+            ${renderTrendCard('GPU-Temperatur', primaryGpu ? primaryGpu.temperature_c : null, history.map((point) => point.gpu_temp_c), '#f59e0b', ' °C', 'Temperaturtrend der Haupt-GPU')}
+            ${renderTrendCard('GPU-Leistung', primaryGpu ? primaryGpu.power_watts : null, history.map((point) => point.gpu_power_watts), '#dc2626', ' W', 'Board-Power der Haupt-GPU')}
+          </div>
+        `;
+        const benchmarkSummaryHtml = `
+          <div class="system-section">
+            <div class="system-section-head">
+              <h4>Empfehlungen</h4>
+              <div class="system-section-sub">Abgeleitet aus den gemessenen Tokenraten auf deiner MI50.</div>
+            </div>
+            <div class="recommendation-grid">
+              <div class="recommendation-card">
+                <div class="recommendation-kicker">Betrieb</div>
+                <div class="recommendation-title">Silent bis Daily</div>
+                <div class="recommendation-copy">90 W fuer maximale Ruhe, 120 W fuer sparsam, 150 W als guter leiser Alltagspunkt.</div>
+              </div>
+              <div class="recommendation-card">
+                <div class="recommendation-kicker">9B Modelle</div>
+                <div class="recommendation-title">120 bis 190 W</div>
+                <div class="recommendation-copy">Bei 9B ist 120 W schon nah an 150, 170 und 190 W. 225 W bringt nur noch wenig extra.</div>
+              </div>
+              <div class="recommendation-card">
+                <div class="recommendation-kicker">14B Coding</div>
+                <div class="recommendation-title">170 bis 225 W</div>
+                <div class="recommendation-copy">14B profitiert klar ab 150 W. 170 oder 190 W sind gute Arbeitsprofile, 225 W bleibt der Performance-Sweet-Spot.</div>
+              </div>
+            </div>
+          </div>
+          <div class="system-section">
+            <div class="system-section-head">
+              <h4>Benchmark Tabelle</h4>
+              <div class="system-section-sub">${benchmarks.updated_at ? `Stand ${formatValue(benchmarks.updated_at)}` : 'Noch keine Messungen gespeichert'}</div>
+            </div>
+            <div class="system-section-sub">Die Tabelle zeigt gemessene lokale Token-Leistung. So kannst du Leistungsstufe und Modell direkt anhand echter Werte waehlen.</div>
+            ${renderBenchmarkTable(Array.isArray(benchmarks.model_sweep) ? benchmarks.model_sweep : [])}
+          </div>
+          <div class="system-section">
+            <div class="system-section-head">
+              <h4>Power Sweep</h4>
+              <div class="system-section-sub">Vergleich einzelner Modelle ueber mehrere Power-Cap-Stufen.</div>
+            </div>
+            ${renderPowerSweepTable(Array.isArray(benchmarks.power_sweep) ? benchmarks.power_sweep : []) || '<div class="doc-empty">Noch kein Power-Sweep vorhanden.</div>'}
+          </div>
+        `;
+        const availableStressModels = Array.from(new Set([
+          ...(Array.isArray(benchmarks.model_sweep) ? benchmarks.model_sweep.map((row) => row.model) : []),
+          ...runtimeModels.map((row) => row.name),
+          stressDefaults.model || '',
+          stressTest.model || ''
+        ].filter(Boolean)));
+        const stressHistory = stressTest.history && typeof stressTest.history === 'object' ? stressTest.history : {};
+        const stressHtml = `
+          <div class="system-section">
+            <div class="system-section-head">
+              <h4>GPU Stress-Test</h4>
+              <div>${stressStatusBadge(stressTest.status)}</div>
+            </div>
+            <div class="system-section-sub">Startet wiederholte Ollama-Generierungen, damit du Temperatursprung, Power-Verhalten und moegliches Piepen ab einer Stufe beobachten kannst. Stop setzt ein Flag und beendet nach dem laufenden Durchgang.</div>
+            <div class="stress-grid">
+              <div class="stress-summary">
+                <div class="meta-row"><div class="meta-label">Modell</div><div>${formatValue(stressTest.model || stressDefaults.model || 'n/a')}</div></div>
+                <div class="meta-row"><div class="meta-label">Dauer / Token-Ziel</div><div>${formatValue(stressTest.duration_seconds || stressDefaults.duration_seconds)} s · ${formatValue(stressTest.num_predict || stressDefaults.num_predict)} Tokens</div></div>
+                <div class="meta-row"><div class="meta-label">Durchlaeufe</div><div>${formatValue(stressTest.iterations_completed || 0)}</div></div>
+                <div class="meta-row"><div class="meta-label">Peak Temperatur</div><div>${benchmarkValue(stressHistory.max_temp_c, ' °C')}</div></div>
+                <div class="meta-row"><div class="meta-label">Peak Leistung</div><div>${benchmarkValue(stressHistory.max_power_watts, ' W')}</div></div>
+                <div class="meta-row"><div class="meta-label">Peak GPU / VRAM</div><div>${benchmarkValue(stressHistory.max_gpu_busy_percent, ' %')} · ${benchmarkValue(stressHistory.max_vram_percent, ' %')}</div></div>
+                <div class="meta-row"><div class="meta-label">Letzter Lauf</div><div>${benchmarkValue(stressTest.last_result_tokens_per_s, ' tok/s')} · ${benchmarkValue(stressTest.last_result_seconds, ' s')}</div></div>
+                <div class="meta-row"><div class="meta-label">Zeitfenster</div><div>${formatValue(stressTest.started_at || '-')} bis ${formatValue(stressTest.finished_at || (stressTest.running ? 'laeuft' : '-'))}</div></div>
+                <div class="meta-row"><div class="meta-label">Fehler</div><div>${formatValue(stressTest.last_error || '-')}</div></div>
+              </div>
+              <div class="stress-actions">
+                <label class="field">
+                  <span>Stress-Modell</span>
+                  <select id="gpu-stress-model">
+                    ${availableStressModels.map((model) => `<option value="${escapeHtml(String(model))}" ${String(model) === String(stressTest.model || stressDefaults.model) ? 'selected' : ''}>${escapeHtml(String(model))}</option>`).join('')}
+                  </select>
+                </label>
+                <label class="field">
+                  <span>Dauer (s)</span>
+                  <input id="gpu-stress-duration" type="number" min="30" max="${escapeHtml(String(stressDefaults.max_duration_seconds || 1800))}" value="${escapeHtml(String(stressTest.running ? stressTest.duration_seconds : (stressDefaults.duration_seconds || 180)))}">
+                </label>
+                <label class="field">
+                  <span>Tokens je Lauf</span>
+                  <input id="gpu-stress-num-predict" type="number" min="64" max="${escapeHtml(String(stressDefaults.max_num_predict || 1024))}" value="${escapeHtml(String(stressTest.running ? stressTest.num_predict : (stressDefaults.num_predict || 512)))}">
+                </label>
+                <button id="gpu-stress-start-btn" class="secondary" ${stressTest.running ? 'disabled' : ''}>Stress starten</button>
+                <button id="gpu-stress-stop-btn" class="secondary" ${stressTest.running ? '' : 'disabled'}>Stress stoppen</button>
+              </div>
+            </div>
+          </div>
+        `;
         tasksSystemMetricsEl.innerHTML = `
+          ${powerCapControlsHtml}
+          ${alertHtml}
+          ${trendHtml}
+          ${renderGpuCards(cards)}
+          ${benchmarkSummaryHtml}
+          ${stressHtml}
           <div class="meta-row"><div class="meta-label">CPU-Auslastung</div><div>${formatValue(data.cpu_percent)} %</div></div>
           <div class="meta-row"><div class="meta-label">Load Average</div><div>${formatValue(data.load_average)}</div></div>
           <div class="meta-row"><div class="meta-label">RAM</div><div>${formatValue(data.memory_used_human)} / ${formatValue(data.memory_total_human)} (${formatValue(data.memory_percent)} %)</div></div>
           <div class="meta-row"><div class="meta-label">Datentraeger /</div><div>${formatValue(data.disk_used_human)} / ${formatValue(data.disk_total_human)} (${formatValue(data.disk_percent)} % frei: ${formatValue(data.disk_free_human)})</div></div>
           <div class="meta-row"><div class="meta-label">GPU</div><div>${formatValue(gpuSummary)}</div></div>
+          <div class="meta-row"><div class="meta-label">GPU-Temperatur</div><div>${gpuTemperature}</div></div>
+          <div class="meta-row"><div class="meta-label">GPU-Leistung</div><div>${gpuPower}</div></div>
+          <div class="meta-row"><div class="meta-label">GPU-Power-Cap</div><div>${gpuPowerCap}</div></div>
+          <div class="meta-row"><div class="meta-label">GPU-Last</div><div>${gpuBusy}</div></div>
+          <div class="meta-row"><div class="meta-label">GPU-VRAM</div><div>${gpuVram}</div></div>
+          <div class="meta-row"><div class="meta-label">PCIe-Link</div><div>${gpuLink}</div></div>
+          <div class="meta-row"><div class="meta-label">GPU-Treiber</div><div>${gpuDriver}</div></div>
+          <div class="meta-row"><div class="meta-label">GPU-Luefter / PWM</div><div>${gpuFan}</div></div>
+          <div class="meta-row"><div class="meta-label">Ollama Runtime</div><div>${runtimeSummary}</div></div>
         `;
       } catch (err) {
         tasksSystemMetricsEl.innerHTML = `<div class="doc-empty">Fehler beim Laden der Systemmetriken: ${err.message}</div>`;
+      }
+    }
+
+    async function setGpuPowerCap(watts) {
+      tasksStatusEl.textContent = `Setze MI50 Power-Cap auf ${watts} W...`;
+      tasksStatusEl.className = 'statusline';
+      try {
+        const res = await fetch('/api/system/gpu-power-cap', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ watts })
+        });
+        const data = await res.json();
+        if (!res.ok) throw new Error(data.error || 'Fehler');
+        tasksStatusEl.textContent = `MI50 Power-Cap aktiv: ${formatValue(data.power_cap_watts)} W`;
+        await loadSystemMetrics();
+      } catch (err) {
+        tasksStatusEl.textContent = `Fehler beim Setzen des MI50 Power-Caps: ${err.message}`;
+        tasksStatusEl.className = 'statusline warn';
+      }
+    }
+
+    async function startGpuStressTest() {
+      const modelEl = document.getElementById('gpu-stress-model');
+      const durationEl = document.getElementById('gpu-stress-duration');
+      const numPredictEl = document.getElementById('gpu-stress-num-predict');
+      const payload = {
+        model: modelEl ? modelEl.value : '',
+        duration_seconds: durationEl ? Number(durationEl.value || 0) : 0,
+        num_predict: numPredictEl ? Number(numPredictEl.value || 0) : 0
+      };
+      tasksStatusEl.textContent = `Starte GPU-Stress-Test mit ${payload.model || 'Standardmodell'}...`;
+      tasksStatusEl.className = 'statusline';
+      try {
+        const res = await fetch('/api/system/stress-test/start', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(payload)
+        });
+        const data = await res.json();
+        if (!res.ok) throw new Error(data.error || 'Fehler');
+        tasksStatusEl.textContent = `GPU-Stress-Test laeuft: ${formatValue(data.stress_test && data.stress_test.model)} fuer ${formatValue(data.stress_test && data.stress_test.duration_seconds)} s`;
+        await loadSystemMetrics();
+      } catch (err) {
+        tasksStatusEl.textContent = `Fehler beim Starten des GPU-Stress-Tests: ${err.message}`;
+        tasksStatusEl.className = 'statusline warn';
+      }
+    }
+
+    async function stopGpuStressTest() {
+      tasksStatusEl.textContent = 'Stoppe GPU-Stress-Test nach aktuellem Durchlauf...';
+      tasksStatusEl.className = 'statusline';
+      try {
+        const res = await fetch('/api/system/stress-test/stop', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({})
+        });
+        const data = await res.json();
+        if (!res.ok) throw new Error(data.error || 'Fehler');
+        tasksStatusEl.textContent = data.stopped ? 'Stop angefordert. Lauf beendet nach dem aktuellen Durchgang.' : 'Kein Stress-Test aktiv.';
+        await loadSystemMetrics();
+      } catch (err) {
+        tasksStatusEl.textContent = `Fehler beim Stoppen des GPU-Stress-Tests: ${err.message}`;
+        tasksStatusEl.className = 'statusline warn';
+      }
+    }
+
+    function renderOllamaRunnerList(runners) {
+      if (!Array.isArray(runners) || !runners.length) {
+        ollamaRunnerListEl.innerHTML = '<div class="doc-empty">Keine aktiven Runner erkannt.</div>';
+        return;
+      }
+      ollamaRunnerListEl.innerHTML = runners.map((runner) => `
+        <div class="doc-row">
+          <div class="doc-main">
+            <div class="doc-title">${escapeHtml(String(runner.name || 'unbekannt'))}</div>
+            <div class="doc-meta">Processor: ${escapeHtml(formatValue(runner.processor || '-'))} · VRAM: ${escapeHtml(formatValue(runner.size_vram || '-'))}</div>
+            <div class="doc-meta">Laeuft bis: ${escapeHtml(formatValue(runner.until || '-'))}</div>
+          </div>
+          <div class="doc-meta">${escapeHtml(formatValue(runner.status_hint || 'aktiv'))}</div>
+        </div>
+      `).join('');
+    }
+
+    async function loadOllamaRunnerStatus() {
+      ollamaRunnerStatusEl.textContent = 'Runner-Status wird geladen...';
+      ollamaRunnerStatusEl.className = 'statusline';
+      try {
+        const res = await fetch('/api/ollama/runner');
+        const data = await res.json();
+        if (!res.ok) throw new Error(data.error || 'Fehler');
+        const hints = Array.isArray(data.hints) ? data.hints : [];
+        const metaRows = [
+          ['Container', data.container_name || 'paperless-ollama'],
+          ['Docker-Status', data.container_status || 'n/a'],
+          ['Health', data.container_health || 'n/a'],
+          ['Aktive Runner', formatValue(data.active_runner_count)],
+          ['Installierte Modelle', formatValue(data.installed_model_count)],
+          ['Ollama API', data.api_reachable ? 'erreichbar' : 'nicht erreichbar'],
+          ['Letzte Aktualisierung', data.checked_at || '-'],
+        ];
+        ollamaRunnerMetaEl.innerHTML = metaRows.map(([label, value]) => `
+          <div class="meta-row"><div class="meta-label">${escapeHtml(String(label))}</div><div>${escapeHtml(formatValue(value))}</div></div>
+        `).join('') + (
+          hints.length
+            ? `<div class="alert-strip">${hints.map((hint) => `<div class="alert-chip ${escapeHtml(String(hint.level || 'info'))}">${escapeHtml(String(hint.message || 'Hinweis'))}</div>`).join('')}</div>`
+            : `<div class="meta-row"><div class="meta-label">Hinweise</div><div>Keine Auffaelligkeiten erkannt.</div></div>`
+        );
+        renderOllamaRunnerList(data.runners || []);
+        ollamaRunnerStatusEl.textContent = data.active_runner_count
+          ? `${formatValue(data.active_runner_count)} Runner aktiv.`
+          : 'Keine aktiven Runner erkannt.';
+      } catch (err) {
+        ollamaRunnerStatusEl.textContent = `Fehler beim Laden des Runner-Status: ${err.message}`;
+        ollamaRunnerStatusEl.className = 'statusline warn';
+        ollamaRunnerMetaEl.innerHTML = `<div class="doc-empty">Fehler beim Laden der Ollama-Daten: ${escapeHtml(err.message)}</div>`;
+        ollamaRunnerListEl.innerHTML = '<div class="doc-empty">Runnerliste nicht verfuegbar.</div>';
+      }
+    }
+
+    async function resetOllamaRunner() {
+      if (!window.confirm('Der Dienst paperless-ollama wird neu gestartet. Aktive Runner werden dabei beendet. Fortfahren?')) {
+        ollamaRunnerStatusEl.textContent = 'Reset abgebrochen.';
+        ollamaRunnerStatusEl.className = 'statusline';
+        return;
+      }
+      ollamaRunnerResetBtn.disabled = true;
+      ollamaRunnerStatusEl.textContent = 'Ollama wird neu gestartet...';
+      ollamaRunnerStatusEl.className = 'statusline';
+      try {
+        const res = await fetch('/api/ollama/runner/reset', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({})
+        });
+        const data = await res.json();
+        if (!res.ok) throw new Error(data.error || 'Fehler');
+        ollamaRunnerStatusEl.textContent = 'Ollama wurde neu gestartet.';
+        ollamaRunnerLogEl.textContent = [
+          `Container: ${formatValue(data.container_name || 'paperless-ollama')}`,
+          `Returncode: ${formatValue(data.returncode)}`,
+          '',
+          String(data.output || 'Keine Ausgabe')
+        ].join('\\n');
+        ollamaRunnerLogEl.scrollTop = ollamaRunnerLogEl.scrollHeight;
+        await loadOllamaRunnerStatus();
+      } catch (err) {
+        ollamaRunnerStatusEl.textContent = `Fehler beim Reset: ${err.message}`;
+        ollamaRunnerStatusEl.className = 'statusline warn';
+        ollamaRunnerLogEl.textContent = `Fehler beim Reset: ${err.message}`;
+      } finally {
+        ollamaRunnerResetBtn.disabled = false;
       }
     }
 
@@ -3153,10 +4010,29 @@ HTML = """<!doctype html>
       await loadTaskJobs();
       await loadSystemMetrics();
     });
+    ollamaRunnerRefreshBtn.addEventListener('click', loadOllamaRunnerStatus);
+    ollamaRunnerResetBtn.addEventListener('click', resetOllamaRunner);
     tasksShowLatestBtn.addEventListener('click', loadLatestBackfillJobStatus);
     tasksRefreshSelectedBtn.addEventListener('click', () => loadBackfillJobStatus(activeTaskJobId || activeBackfillJobId));
     tasksCancelSelectedBtn.addEventListener('click', cancelSelectedTaskJob);
     tasksDeleteSelectedBtn.addEventListener('click', deleteSelectedTaskJob);
+    tasksSystemMetricsEl.addEventListener('click', (event) => {
+      const button = event.target instanceof HTMLElement ? event.target.closest('button, [data-gpu-power-cap]') : null;
+      if (!button) return;
+      if (button.id === 'gpu-stress-start-btn') {
+        startGpuStressTest();
+        return;
+      }
+      if (button.id === 'gpu-stress-stop-btn') {
+        stopGpuStressTest();
+        return;
+      }
+      const powerTarget = button.closest('[data-gpu-power-cap]');
+      if (!powerTarget) return;
+      const watts = Number(powerTarget.getAttribute('data-gpu-power-cap'));
+      if (!Number.isFinite(watts) || watts <= 0) return;
+      setGpuPowerCap(watts);
+    });
     saveModelConfigBtn.addEventListener('click', saveModelConfigUi);
     reloadModelConfigBtn.addEventListener('click', loadModelConfig);
     installLocalModelBtn.addEventListener('click', installLocalModelUi);
@@ -3179,6 +4055,9 @@ HTML = """<!doctype html>
     loadLatestBackfillJobStatus();
     loadTaskJobs();
     loadSystemMetrics();
+    loadOllamaRunnerStatus();
+    window.setInterval(loadSystemMetrics, 2000);
+    window.setInterval(loadOllamaRunnerStatus, 5000);
     loadModelConfig();
     loadProviderConfigUi();
   </script>
@@ -5251,6 +6130,637 @@ def _bytes_to_human(value: int) -> str:
     return f"{value} B"
 
 
+def _resolve_sys_path(relative: str) -> Path:
+    clean = relative.strip().lstrip("/")
+    if clean.startswith("sys/"):
+        clean = clean[4:]
+    host_path = HOST_SYS_ROOT / clean
+    if host_path.exists():
+        return host_path
+    return Path("/sys") / clean
+
+
+def _read_text_if_exists(path: Path) -> str:
+    try:
+        return path.read_text(encoding="utf-8", errors="replace").strip()
+    except Exception:
+        return ""
+
+
+def _read_int_if_exists(path: Path) -> int | None:
+    raw = _read_text_if_exists(path)
+    if not raw:
+        return None
+    try:
+        return int(raw)
+    except ValueError:
+        return None
+
+
+def _device_vendor_label(vendor_id: str) -> str:
+    mapping = {
+        "0x1002": "AMD",
+        "0x10de": "NVIDIA",
+        "0x8086": "Intel",
+    }
+    return mapping.get(vendor_id.lower(), vendor_id or "Unbekannt")
+
+
+def _read_ollama_runtime_models() -> list[dict[str, str]]:
+    status, payload = ollama_request("/api/ps")
+    if status != 200 or not isinstance(payload, dict):
+        return []
+    models = payload.get("models")
+    if not isinstance(models, list):
+        return []
+    runtime_models: list[dict[str, str]] = []
+    for item in models:
+        if not isinstance(item, dict):
+            continue
+        runtime_models.append(
+            {
+                "name": str(item.get("name", "")).strip(),
+                "processor": str(item.get("processor", "")).strip(),
+                "size_vram": str(item.get("size_vram", "")).strip(),
+                "until": str(item.get("expires_at", "")).strip(),
+            }
+        )
+    return runtime_models
+
+
+class _UnixSocketHTTPConnection(http.client.HTTPConnection):
+    def __init__(self, socket_path: str, timeout: float = 30):
+        super().__init__("localhost", timeout=timeout)
+        self.socket_path = socket_path
+
+    def connect(self) -> None:
+        self.sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+        self.sock.settimeout(self.timeout)
+        self.sock.connect(self.socket_path)
+
+
+def _docker_api_request(method: str, path: str, payload: dict | None = None, timeout: float = 30) -> tuple[int, object]:
+    if not DOCKER_SOCKET_PATH.exists():
+        return 500, {"error": f"Docker socket not found: {DOCKER_SOCKET_PATH}"}
+    body = json.dumps(payload).encode("utf-8") if payload is not None else None
+    headers = {"Content-Type": "application/json"} if payload is not None else {}
+    conn = _UnixSocketHTTPConnection(str(DOCKER_SOCKET_PATH), timeout=timeout)
+    try:
+        conn.request(method, path, body=body, headers=headers)
+        response = conn.getresponse()
+        raw = response.read()
+        text = raw.decode("utf-8", errors="replace") if raw else ""
+        if not text:
+            return response.status, {}
+        try:
+            return response.status, json.loads(text)
+        except json.JSONDecodeError:
+            return response.status, {"raw": text}
+    except Exception as exc:
+        return 500, {"error": str(exc)}
+    finally:
+        try:
+            conn.close()
+        except Exception:
+            pass
+
+
+def _docker_inspect_ollama_container() -> dict[str, object]:
+    container_name = "paperless-ollama"
+    status, payload = _docker_api_request("GET", f"/containers/{container_name}/json")
+    if status != 200 or not isinstance(payload, dict):
+        return {
+            "container_name": container_name,
+            "container_status": "unknown",
+            "container_health": "unknown",
+            "inspect_error": str(payload.get("error") if isinstance(payload, dict) else payload or "docker inspect failed"),
+        }
+    state = payload.get("State") if isinstance(payload.get("State"), dict) else {}
+    health = state.get("Health") if isinstance(state.get("Health"), dict) else {}
+    return {
+        "container_name": container_name,
+        "container_status": str(state.get("Status") or "unknown"),
+        "container_health": str(health.get("Status") or "none"),
+    }
+
+
+def read_ollama_runner_status() -> tuple[int, dict]:
+    runtime_models = _read_ollama_runtime_models()
+    tags_status, tags_payload = ollama_request("/api/tags")
+    inspect = _docker_inspect_ollama_container()
+    api_reachable = tags_status == 200 and isinstance(tags_payload, dict)
+    installed_models = tags_payload.get("models", []) if isinstance(tags_payload, dict) else []
+    hints: list[dict[str, str]] = []
+    if not api_reachable:
+        hints.append({"level": "warn", "message": "Ollama API antwortet nicht sauber."})
+    if inspect.get("container_health") not in {"healthy", "none"}:
+        hints.append({"level": "warn", "message": f"Container-Health ist {inspect.get('container_health') or 'unbekannt'}."})
+    if inspect.get("inspect_error"):
+        hints.append({"level": "warn", "message": str(inspect.get("inspect_error"))})
+    if not runtime_models:
+        hints.append({"level": "info", "message": "Derzeit keine aktiven Runner."})
+    for runner in runtime_models:
+        processor = str(runner.get("processor") or "").strip().lower()
+        status_hint = "aktiv"
+        if "stopping" in processor:
+            status_hint = "stopping"
+            hints.append({"level": "warn", "message": f"Runner {runner.get('name') or '-'} haengt auf Stopping."})
+        elif not processor:
+            status_hint = "ohne processor-info"
+        runner["status_hint"] = status_hint
+    payload = {
+        **inspect,
+        "api_reachable": api_reachable,
+        "active_runner_count": len(runtime_models),
+        "installed_model_count": len(installed_models) if isinstance(installed_models, list) else 0,
+        "runners": runtime_models,
+        "hints": hints,
+        "checked_at": time.strftime("%Y-%m-%d %H:%M:%S"),
+    }
+    return 200, payload
+
+
+def reset_ollama_runner() -> tuple[int, dict]:
+    container_name = "paperless-ollama"
+    status, payload = _docker_api_request("POST", f"/containers/{container_name}/restart?t=10", timeout=180)
+    output = ""
+    if status not in {200, 204}:
+        return 500, {
+            "error": str(payload.get("error") if isinstance(payload, dict) else payload or "docker restart failed"),
+            "container_name": container_name,
+            "returncode": status,
+        }
+    time.sleep(2)
+    status_code, status_payload = read_ollama_runner_status()
+    return status_code, {
+        "container_name": container_name,
+        "returncode": 0,
+        "output": output,
+        "status": status_payload,
+    }
+
+
+def _read_power_value_watts(hwmon_dir: Path | None, *names: str) -> float | None:
+    if hwmon_dir is None:
+        return None
+    for name in names:
+        raw = _read_int_if_exists(hwmon_dir / name)
+        if raw is None:
+            continue
+        if name.endswith("_average") or name.endswith("_input"):
+            return round(raw / 1_000_000.0, 1)
+        if name.endswith("_cap") or "_cap_" in name:
+            return round(raw / 1_000_000.0, 1)
+    return None
+
+
+def _detect_amd_gpu_card() -> str:
+    drm_root = _resolve_sys_path("class/drm")
+    for card_dir in sorted(drm_root.glob("card[0-9]*")):
+        vendor = _read_text_if_exists(card_dir / "device/vendor")
+        if vendor != "0x1002":
+            continue
+        for candidate in sorted((card_dir / "device/hwmon").glob("hwmon*")):
+            if candidate.is_dir() and (candidate / "power1_cap").exists():
+                return card_dir.name
+    raise FileNotFoundError("No AMD GPU with power-cap interface found")
+
+
+def _gpu_hwmon_dir(card: str | None = None) -> Path:
+    resolved_card = card or _detect_amd_gpu_card()
+    drm_root = _resolve_sys_path(f"class/drm/{resolved_card}/device/hwmon")
+    for candidate in sorted(drm_root.glob("hwmon*")):
+        if candidate.is_dir() and (candidate / "power1_cap").exists():
+            return candidate
+    raise FileNotFoundError(f"No hwmon power-cap interface found for {resolved_card}")
+
+
+def _write_gpu_power_cap(watts: int, card: str | None = None) -> float:
+    hwmon_dir = _gpu_hwmon_dir(card)
+    min_uW = _read_int_if_exists(hwmon_dir / "power1_cap_min") or 0
+    max_uW = _read_int_if_exists(hwmon_dir / "power1_cap_max") or 0
+    target_uW = int(max(min_uW, min(watts * 1_000_000, max_uW or watts * 1_000_000)))
+    (hwmon_dir / "power1_cap").write_text(str(target_uW), encoding="utf-8")
+    return round(target_uW / 1_000_000.0, 1)
+
+
+def _persist_gpu_power_cap(watts: int) -> None:
+    GPU_POWER_CAP_STATE_PATH.parent.mkdir(parents=True, exist_ok=True)
+    GPU_POWER_CAP_STATE_PATH.write_text(
+        f"AMD_GPU_CARD=auto\nAMD_GPU_POWER_CAP_WATTS={watts}\n",
+        encoding="utf-8",
+    )
+
+
+def set_gpu_power_cap(payload: dict) -> tuple[int, dict]:
+    raw_watts = payload.get("watts")
+    try:
+        watts = int(raw_watts)
+    except (TypeError, ValueError):
+        return 400, {"error": "watts must be an integer"}
+    if watts <= 0:
+        return 400, {"error": "watts must be positive"}
+    applied = _write_gpu_power_cap(watts)
+    _persist_gpu_power_cap(int(round(applied)))
+    return 200, {"power_cap_watts": applied, "persisted": True}
+
+
+def _power_cap_label(watts: int | float | None) -> str:
+    mapping = {
+        90: "Eco",
+        120: "Cool",
+        150: "Leise",
+        170: "Balanced+",
+        190: "Balanced",
+        225: "Boost",
+        250: "Max",
+    }
+    try:
+        normalized = int(round(float(watts or 0)))
+    except (TypeError, ValueError):
+        return "Profil"
+    return mapping.get(normalized, "Profil")
+
+
+def _read_benchmark_results() -> dict[str, object]:
+    if not BENCHMARK_RESULTS_PATH.is_file():
+        return {"available": False, "path": str(BENCHMARK_RESULTS_PATH), "model_sweep": [], "power_sweep": []}
+    try:
+        raw = json.loads(BENCHMARK_RESULTS_PATH.read_text(encoding="utf-8"))
+    except Exception as exc:
+        return {
+            "available": False,
+            "path": str(BENCHMARK_RESULTS_PATH),
+            "error": str(exc),
+            "model_sweep": [],
+            "power_sweep": [],
+        }
+    model_sweep: list[dict[str, object]] = []
+    for entry in raw.get("model_sweep", []) if isinstance(raw, dict) else []:
+        if not isinstance(entry, dict):
+            continue
+        model_sweep.append(
+            {
+                "model": str(entry.get("model", "")).strip(),
+                "tokens_per_s": entry.get("tokens_per_s"),
+                "elapsed_wall_s": entry.get("elapsed_wall_s"),
+                "load_s": entry.get("load_s"),
+                "power_cap_watts": entry.get("before", {}).get("power_cap_watts") if isinstance(entry.get("before"), dict) else None,
+            }
+        )
+    grouped_runs: dict[str, list[dict[str, object]]] = {}
+    for run in raw.get("power_sweep", []) if isinstance(raw, dict) else []:
+        if not isinstance(run, dict):
+            continue
+        model = str(run.get("model", "")).strip()
+        watts = run.get("power_watts")
+        if watts is None and isinstance(run.get("before"), dict):
+            watts = run.get("before", {}).get("power_cap_watts")
+        grouped_runs.setdefault(model, []).append(
+            {
+                "power_cap_watts": watts,
+                "power_label": _power_cap_label(watts),
+                "tokens_per_s": run.get("tokens_per_s"),
+                "elapsed_wall_s": run.get("elapsed_wall_s"),
+                "load_s": run.get("load_s"),
+            }
+        )
+    power_sweep = [
+        {
+            "model": model,
+            "runs": sorted(runs, key=lambda item: float(item.get("power_cap_watts") or 0)),
+        }
+        for model, runs in grouped_runs.items()
+        if model
+    ]
+    return {
+        "available": True,
+        "path": str(BENCHMARK_RESULTS_PATH),
+        "updated_at": time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(BENCHMARK_RESULTS_PATH.stat().st_mtime)),
+        "model_sweep": model_sweep,
+        "power_sweep": power_sweep,
+    }
+
+
+def _history_points_since(started_at: str) -> list[dict[str, object]]:
+    if not started_at:
+        return []
+    try:
+        started_ts = int(time.mktime(time.strptime(started_at, "%Y-%m-%d %H:%M:%S")))
+    except Exception:
+        return []
+    with SYSTEM_METRIC_HISTORY_LOCK:
+        return [point for point in SYSTEM_METRIC_HISTORY if int(point.get("ts") or 0) >= started_ts]
+
+
+def _history_extrema(points: list[dict[str, object]]) -> dict[str, float | None]:
+    def _max_numeric(key: str) -> float | None:
+        values = [float(point[key]) for point in points if isinstance(point, dict) and isinstance(point.get(key), (int, float))]
+        return round(max(values), 1) if values else None
+
+    return {
+        "max_temp_c": _max_numeric("gpu_temp_c"),
+        "max_power_watts": _max_numeric("gpu_power_watts"),
+        "max_gpu_busy_percent": _max_numeric("gpu_busy_percent"),
+        "max_vram_percent": _max_numeric("gpu_vram_percent"),
+    }
+
+
+def _stress_state_payload() -> dict[str, object]:
+    with STRESS_TEST_LOCK:
+        state = dict(STRESS_TEST_STATE)
+    started_at = str(state.get("started_at") or "")
+    history = _history_extrema(_history_points_since(started_at)) if started_at else state.get("history") or {}
+    state["history"] = history
+    if started_at:
+        try:
+            started_ts = time.mktime(time.strptime(started_at, "%Y-%m-%d %H:%M:%S"))
+            finished_at = str(state.get("finished_at") or "")
+            finished_ts = time.time()
+            if finished_at:
+                finished_ts = time.mktime(time.strptime(finished_at, "%Y-%m-%d %H:%M:%S"))
+            state["elapsed_seconds"] = max(0, round(finished_ts - started_ts, 1))
+        except Exception:
+            state["elapsed_seconds"] = None
+    else:
+        state["elapsed_seconds"] = 0
+    return state
+
+
+def _run_stress_test(model: str, duration_seconds: int, num_predict: int, prompt: str) -> None:
+    with STRESS_TEST_LOCK:
+        STRESS_TEST_STATE.update(
+            {
+                "running": True,
+                "status": "running",
+                "model": model,
+                "duration_seconds": duration_seconds,
+                "num_predict": num_predict,
+                "prompt": prompt,
+                "started_at": time.strftime("%Y-%m-%d %H:%M:%S"),
+                "finished_at": "",
+                "stop_requested": False,
+                "iterations_completed": 0,
+                "last_error": "",
+                "last_result_tokens_per_s": None,
+                "last_result_seconds": None,
+                "history": {"max_temp_c": None, "max_power_watts": None, "max_gpu_busy_percent": None, "max_vram_percent": None},
+            }
+        )
+    start_monotonic = time.monotonic()
+    try:
+        while True:
+            with STRESS_TEST_LOCK:
+                stop_requested = bool(STRESS_TEST_STATE.get("stop_requested"))
+                iterations_completed = int(STRESS_TEST_STATE.get("iterations_completed") or 0)
+            if stop_requested:
+                break
+            if (time.monotonic() - start_monotonic) >= duration_seconds and iterations_completed > 0:
+                break
+            iteration_started = time.monotonic()
+            status, payload = ollama_request(
+                "/api/generate",
+                {
+                    "model": model,
+                    "prompt": prompt,
+                    "stream": False,
+                    "options": {
+                        "num_predict": num_predict,
+                        "temperature": 0.2,
+                        "num_thread": ollama_num_thread(),
+                    },
+                },
+            )
+            iteration_elapsed = round(time.monotonic() - iteration_started, 2)
+            if status != 200 or not isinstance(payload, dict):
+                raise RuntimeError(str(payload.get("error") if isinstance(payload, dict) else payload))
+            eval_count = payload.get("eval_count")
+            eval_duration = payload.get("eval_duration")
+            tokens_per_s = None
+            if isinstance(eval_count, int) and isinstance(eval_duration, int) and eval_duration > 0:
+                tokens_per_s = round(eval_count / (eval_duration / 1_000_000_000.0), 2)
+            with STRESS_TEST_LOCK:
+                STRESS_TEST_STATE["iterations_completed"] = int(STRESS_TEST_STATE.get("iterations_completed") or 0) + 1
+                STRESS_TEST_STATE["last_result_tokens_per_s"] = tokens_per_s
+                STRESS_TEST_STATE["last_result_seconds"] = iteration_elapsed
+                STRESS_TEST_STATE["history"] = _history_extrema(_history_points_since(str(STRESS_TEST_STATE.get("started_at") or "")))
+        with STRESS_TEST_LOCK:
+            STRESS_TEST_STATE["running"] = False
+            STRESS_TEST_STATE["status"] = "stopped" if STRESS_TEST_STATE.get("stop_requested") else "done"
+            STRESS_TEST_STATE["finished_at"] = time.strftime("%Y-%m-%d %H:%M:%S")
+            STRESS_TEST_STATE["history"] = _history_extrema(_history_points_since(str(STRESS_TEST_STATE.get("started_at") or "")))
+    except Exception as exc:
+        with STRESS_TEST_LOCK:
+            STRESS_TEST_STATE["running"] = False
+            STRESS_TEST_STATE["status"] = "error"
+            STRESS_TEST_STATE["last_error"] = str(exc)
+            STRESS_TEST_STATE["finished_at"] = time.strftime("%Y-%m-%d %H:%M:%S")
+            STRESS_TEST_STATE["history"] = _history_extrema(_history_points_since(str(STRESS_TEST_STATE.get("started_at") or "")))
+
+
+def start_stress_test(payload: dict) -> tuple[int, dict]:
+    with STRESS_TEST_LOCK:
+        if STRESS_TEST_STATE.get("running"):
+            return 409, {"error": "Stress-Test laeuft bereits", "stress_test": dict(STRESS_TEST_STATE)}
+    model = str(payload.get("model") or STRESS_TEST_DEFAULT_MODEL).strip() or STRESS_TEST_DEFAULT_MODEL
+    duration_seconds = positive_int(payload.get("duration_seconds"), STRESS_TEST_DEFAULT_DURATION_SECONDS)
+    num_predict = positive_int(payload.get("num_predict"), STRESS_TEST_DEFAULT_NUM_PREDICT)
+    duration_seconds = min(duration_seconds, STRESS_TEST_MAX_DURATION_SECONDS)
+    num_predict = min(num_predict, STRESS_TEST_MAX_NUM_PREDICT)
+    prompt = str(payload.get("prompt") or STRESS_TEST_PROMPT).strip() or STRESS_TEST_PROMPT
+    threading.Thread(
+        target=_run_stress_test,
+        args=(model, duration_seconds, num_predict, prompt),
+        name="gpu-stress-test",
+        daemon=True,
+    ).start()
+    return 200, {"started": True, "stress_test": _stress_state_payload()}
+
+
+def stop_stress_test() -> tuple[int, dict]:
+    with STRESS_TEST_LOCK:
+        if not STRESS_TEST_STATE.get("running"):
+            return 200, {"stopped": False, "stress_test": dict(STRESS_TEST_STATE)}
+        STRESS_TEST_STATE["stop_requested"] = True
+        STRESS_TEST_STATE["status"] = "stopping"
+    return 200, {"stopped": True, "stress_test": _stress_state_payload()}
+
+
+def _gpu_alerts(card: dict[str, object]) -> list[dict[str, str]]:
+    alerts: list[dict[str, str]] = []
+    temperature_c = card.get("temperature_c")
+    if isinstance(temperature_c, (int, float)):
+        if temperature_c >= GPU_CRIT_TEMP_C:
+            alerts.append({"level": "crit", "message": f"GPU kritisch warm: {temperature_c:.1f} °C"})
+        elif temperature_c >= GPU_WARN_TEMP_C:
+            alerts.append({"level": "warn", "message": f"GPU warm: {temperature_c:.1f} °C"})
+
+    power_watts = card.get("power_watts")
+    power_cap_watts = card.get("power_cap_watts")
+    gpu_busy_percent = card.get("gpu_busy_percent")
+    if isinstance(power_watts, (int, float)) and isinstance(power_cap_watts, (int, float)) and power_cap_watts > 0:
+        cap_util = round((power_watts / power_cap_watts) * 100.0, 1)
+        if cap_util >= GPU_WARN_POWER_CAP_UTIL_PERCENT:
+            level = "crit" if cap_util >= 99 else "warn"
+            message = f"Power-Cap fast erreicht: {power_watts:.1f} / {power_cap_watts:.1f} W ({cap_util:.1f} %)"
+            if isinstance(gpu_busy_percent, int) and gpu_busy_percent >= 90:
+                message += ", Last bleibt hoch"
+            alerts.append({"level": level, "message": message})
+
+    return alerts
+
+
+def _read_gpu_diagnostics(include_runtime_models: bool = True) -> dict[str, object]:
+    dri_root = _resolve_sys_path("class/drm")
+    gpu_devices: list[str] = []
+    render_devices: list[str] = []
+    cards: list[dict[str, object]] = []
+    if dri_root.exists():
+        for child in sorted(dri_root.iterdir()):
+            name = child.name
+            if name.startswith("card") or name.startswith("renderD"):
+                gpu_devices.append(name)
+            if name.startswith("renderD"):
+                render_devices.append(name)
+        for card_dir in sorted(entry for entry in dri_root.iterdir() if re.fullmatch(r"card\d+", entry.name)):
+            device_root = card_dir / "device"
+            hwmon_root = device_root / "hwmon"
+            hwmon_dir = next((entry for entry in sorted(hwmon_root.glob("hwmon*")) if entry.is_dir()), None)
+            vendor_id = _read_text_if_exists(device_root / "vendor")
+            device_id = _read_text_if_exists(device_root / "device")
+            temp_milli = _read_int_if_exists(hwmon_dir / "temp1_input") if hwmon_dir else None
+            power_watts = _read_power_value_watts(hwmon_dir, "power1_average", "power1_input")
+            power_cap_watts = _read_power_value_watts(hwmon_dir, "power1_cap")
+            power_cap_default_watts = _read_power_value_watts(hwmon_dir, "power1_cap_default")
+            power_cap_max_watts = _read_power_value_watts(hwmon_dir, "power1_cap_max")
+            power_cap_min_watts = _read_power_value_watts(hwmon_dir, "power1_cap_min")
+            busy_percent = _read_int_if_exists(device_root / "gpu_busy_percent")
+            vram_total = _read_int_if_exists(device_root / "mem_info_vram_total")
+            vram_used = _read_int_if_exists(device_root / "mem_info_vram_used")
+            link_speed = _read_text_if_exists(device_root / "current_link_speed")
+            link_width = _read_text_if_exists(device_root / "current_link_width")
+            fan_rpm = _read_int_if_exists(hwmon_dir / "fan1_input") if hwmon_dir else None
+            pwm_value = _read_int_if_exists(hwmon_dir / "pwm1") if hwmon_dir else None
+            driver_name = ""
+            driver_link = device_root / "driver"
+            try:
+                if driver_link.exists():
+                    driver_name = driver_link.resolve().name
+            except Exception:
+                driver_name = ""
+            card = {
+                "card": card_dir.name,
+                "vendor": _device_vendor_label(vendor_id),
+                "vendor_id": vendor_id,
+                "device_id": device_id,
+                "driver": driver_name,
+                "temperature_c": round(temp_milli / 1000.0, 1) if temp_milli is not None else None,
+                "power_watts": power_watts,
+                "power_cap_watts": power_cap_watts,
+                "power_cap_default_watts": power_cap_default_watts,
+                "power_cap_max_watts": power_cap_max_watts,
+                "power_cap_min_watts": power_cap_min_watts,
+                "power_cap_util_percent": round((power_watts / power_cap_watts) * 100.0, 1) if power_watts is not None and power_cap_watts not in (None, 0) else None,
+                "gpu_busy_percent": busy_percent,
+                "vram_total_human": _bytes_to_human(vram_total or 0) if vram_total is not None else "",
+                "vram_used_human": _bytes_to_human(vram_used or 0) if vram_used is not None else "",
+                "vram_percent": round(((vram_used or 0) / max(vram_total or 1, 1)) * 100, 1) if vram_total else None,
+                "link_speed": link_speed,
+                "link_width": link_width,
+                "fan_rpm": fan_rpm,
+                "fan_pwm": pwm_value,
+            }
+            card["alerts"] = _gpu_alerts(card)
+            cards.append(card)
+    cards.sort(
+        key=lambda card: (
+            0 if card.get("vendor_id") == "0x1002" else 1,
+            0 if card.get("power_cap_watts") is not None else 1,
+            str(card.get("card") or ""),
+        )
+    )
+    gpu_available = bool(render_devices)
+    gpu_note = ""
+    if gpu_devices and not render_devices:
+        gpu_note = "Grafikgeraet sichtbar, aber keine nutzbare Render-Schnittstelle"
+    if not gpu_devices:
+        gpu_note = "Keine nutzbare GPU auf Host-/Container-Ebene sichtbar"
+    return {
+        "available": gpu_available,
+        "devices": gpu_devices,
+        "render_devices": render_devices,
+        "label": "Nutzbare GPU / iGPU erkannt" if gpu_available else "",
+        "note": gpu_note,
+        "cards": cards,
+        "alerts": [alert for card in cards for alert in card.get("alerts", []) if isinstance(alert, dict)],
+        "power_cap_presets_watts": sorted(set(GPU_POWER_CAP_PRESETS)),
+        "power_cap_presets": [
+            {"watts": watts, "label": _power_cap_label(watts), "title": f"{_power_cap_label(watts)} {watts} W"}
+            for watts in sorted(set(GPU_POWER_CAP_PRESETS))
+        ],
+        "runtime_models": _read_ollama_runtime_models() if include_runtime_models else [],
+    }
+
+
+def _build_history_point(gpu: dict[str, object]) -> dict[str, object]:
+    cards = gpu.get("cards")
+    primary_gpu = cards[0] if isinstance(cards, list) and cards else {}
+    if not isinstance(primary_gpu, dict):
+        primary_gpu = {}
+    return {
+        "ts": int(time.time()),
+        "gpu_temp_c": primary_gpu.get("temperature_c"),
+        "gpu_busy_percent": primary_gpu.get("gpu_busy_percent"),
+        "gpu_vram_percent": primary_gpu.get("vram_percent"),
+        "gpu_power_watts": primary_gpu.get("power_watts"),
+    }
+
+
+def _record_history_point(point: dict[str, object]) -> None:
+    with SYSTEM_METRIC_HISTORY_LOCK:
+        SYSTEM_METRIC_HISTORY.append(point)
+
+
+def _ensure_recent_history() -> None:
+    now = int(time.time())
+    with SYSTEM_METRIC_HISTORY_LOCK:
+        latest_ts = int(SYSTEM_METRIC_HISTORY[-1]["ts"]) if SYSTEM_METRIC_HISTORY else 0
+    if latest_ts and (now - latest_ts) < SYSTEM_HISTORY_INTERVAL_SECONDS:
+        return
+    gpu = _read_gpu_diagnostics(include_runtime_models=False)
+    _record_history_point(_build_history_point(gpu))
+
+
+def _history_payload() -> dict[str, object]:
+    _ensure_recent_history()
+    with SYSTEM_METRIC_HISTORY_LOCK:
+        points = list(SYSTEM_METRIC_HISTORY)
+    return {
+        "sample_interval_seconds": SYSTEM_HISTORY_INTERVAL_SECONDS,
+        "window_minutes": round((SYSTEM_HISTORY_SAMPLES * SYSTEM_HISTORY_INTERVAL_SECONDS) / 60, 1),
+        "points": points,
+    }
+
+
+def _system_metric_sampler() -> None:
+    while True:
+        try:
+            gpu = _read_gpu_diagnostics(include_runtime_models=False)
+            _record_history_point(_build_history_point(gpu))
+        except Exception:
+            pass
+        time.sleep(SYSTEM_HISTORY_INTERVAL_SECONDS)
+
+
+def start_system_metric_sampler() -> None:
+    global SYSTEM_METRIC_SAMPLER_STARTED
+    with SYSTEM_METRIC_SAMPLER_LOCK:
+        if SYSTEM_METRIC_SAMPLER_STARTED:
+            return
+        SYSTEM_METRIC_SAMPLER_STARTED = True
+    threading.Thread(target=_system_metric_sampler, name="system-metric-sampler", daemon=True).start()
+
+
 def read_system_metrics() -> tuple[int, dict]:
     cpu_percent = _read_cpu_percent()
     try:
@@ -5276,33 +6786,7 @@ def read_system_metrics() -> tuple[int, dict]:
     disk_free = stat.f_frsize * stat.f_bavail
     disk_used = max(disk_total - disk_free, 0)
     disk_percent = round((disk_used / disk_total) * 100, 1) if disk_total else 0.0
-    gpu_devices = []
-    render_devices = []
-    dri_root = Path("/dev/dri")
-    if dri_root.exists():
-        for child in sorted(dri_root.iterdir()):
-            gpu_devices.append(child.name)
-            if child.name.startswith("renderD"):
-                render_devices.append(child.name)
-    gpu_available = bool(render_devices)
-    gpu_note = ""
-    if gpu_devices and not render_devices:
-        gpu_note = "Grafikgeraet sichtbar, aber keine nutzbare Render-Schnittstelle"
-    if not gpu_devices:
-        try:
-            lspci = subprocess.run(
-                ["lspci"],
-                capture_output=True,
-                text=True,
-                timeout=5,
-                check=False,
-            )
-            gpu_note = "Keine nutzbare GPU in der VM sichtbar"
-            lines = [line.strip() for line in lspci.stdout.splitlines() if any(token in line.lower() for token in ("vga", "3d controller", "display"))]
-            if lines:
-                gpu_note = "Nur allgemeiner Video-Adapter sichtbar"
-        except Exception:
-            gpu_note = "Keine nutzbare GPU in der VM sichtbar"
+    gpu = _read_gpu_diagnostics()
     payload = {
         "cpu_percent": cpu_percent,
         "load_average": load_average,
@@ -5313,12 +6797,17 @@ def read_system_metrics() -> tuple[int, dict]:
         "disk_used_human": _bytes_to_human(disk_used),
         "disk_free_human": _bytes_to_human(disk_free),
         "disk_percent": disk_percent,
-        "gpu": {
-            "available": gpu_available,
-            "devices": gpu_devices,
-            "render_devices": render_devices,
-            "label": "Nutzbare GPU / iGPU erkannt" if gpu_available else "",
-            "note": gpu_note,
+        "gpu": gpu,
+        "history": _history_payload(),
+        "benchmarks": _read_benchmark_results(),
+        "stress_test": _stress_state_payload(),
+        "stress_test_defaults": {
+            "model": STRESS_TEST_DEFAULT_MODEL,
+            "duration_seconds": STRESS_TEST_DEFAULT_DURATION_SECONDS,
+            "num_predict": STRESS_TEST_DEFAULT_NUM_PREDICT,
+            "max_duration_seconds": STRESS_TEST_MAX_DURATION_SECONDS,
+            "max_num_predict": STRESS_TEST_MAX_NUM_PREDICT,
+            "prompt": STRESS_TEST_PROMPT,
         },
     }
     return 200, payload
@@ -5626,6 +7115,13 @@ class Handler(BaseHTTPRequestHandler):
                 status, payload = 500, {"error": str(exc)}
             self._send(status, json.dumps(payload).encode("utf-8"), "application/json")
             return
+        if self.path == "/api/ollama/runner":
+            try:
+                status, payload = read_ollama_runner_status()
+            except Exception as exc:
+                status, payload = 500, {"error": str(exc)}
+            self._send(status, json.dumps(payload).encode("utf-8"), "application/json")
+            return
         if self.path.startswith("/api/paperless/document/"):
             try:
                 document_id = int(self.path.rsplit("/", 1)[-1])
@@ -5742,6 +7238,46 @@ class Handler(BaseHTTPRequestHandler):
         self._send(404, b"Not found", "text/plain; charset=utf-8")
 
     def do_POST(self) -> None:
+        if self.path == "/api/system/gpu-power-cap":
+            length = int(self.headers.get("Content-Length", "0"))
+            raw = self.rfile.read(length)
+            try:
+                payload = json.loads(raw.decode("utf-8")) if raw else {}
+                status, response = set_gpu_power_cap(payload)
+            except Exception as exc:
+                status, response = 500, {"error": str(exc)}
+            self._send(status, json.dumps(response).encode("utf-8"), "application/json")
+            return
+        if self.path == "/api/system/stress-test/start":
+            length = int(self.headers.get("Content-Length", "0"))
+            raw = self.rfile.read(length)
+            try:
+                payload = json.loads(raw.decode("utf-8")) if raw else {}
+                status, response = start_stress_test(payload)
+            except Exception as exc:
+                status, response = 500, {"error": str(exc)}
+            self._send(status, json.dumps(response).encode("utf-8"), "application/json")
+            return
+        if self.path == "/api/system/stress-test/stop":
+            length = int(self.headers.get("Content-Length", "0"))
+            if length:
+                self.rfile.read(length)
+            try:
+                status, response = stop_stress_test()
+            except Exception as exc:
+                status, response = 500, {"error": str(exc)}
+            self._send(status, json.dumps(response).encode("utf-8"), "application/json")
+            return
+        if self.path == "/api/ollama/runner/reset":
+            length = int(self.headers.get("Content-Length", "0"))
+            if length:
+                self.rfile.read(length)
+            try:
+                status, response = reset_ollama_runner()
+            except Exception as exc:
+                status, response = 500, {"error": str(exc)}
+            self._send(status, json.dumps(response).encode("utf-8"), "application/json")
+            return
         if self.path.startswith("/api/paperless/backfill-jobs/") and self.path.endswith("/cancel"):
             job_id = self.path.rsplit("/", 2)[-2]
             try:
@@ -5865,6 +7401,7 @@ class Handler(BaseHTTPRequestHandler):
 
 
 if __name__ == "__main__":
+    start_system_metric_sampler()
     httpd = ThreadingHTTPServer((HOST, PORT), Handler)
     print(f"Ollama web listening on http://{HOST}:{PORT}", flush=True)
     httpd.serve_forever()
