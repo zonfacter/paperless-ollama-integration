@@ -111,6 +111,44 @@ curl -sS http://127.0.0.1:11434/api/chat -d '{
 }'
 ```
 
+Hinweis: Das neue Gemma 4-Modell `kwmcglon/gemma-4-E4B-it` liefert hochaufloesende Resultate, benoetigt aber eine Ollama-Version >= 0.20.2. Wenn beim `ollama pull` eine `412`-Antwort kommt, ist der Container-Stack noch zu alt und muss auf `ollama/ollama:0.20.2` oder neuer gebracht werden.
+
+Direkter Docker-Check:
+
+```bash
+sudo docker exec paperless-ollama ollama --version
+sudo docker inspect paperless-ollama --format '{{.Config.Image}}'
+```
+
+## `llama.cpp`: `unknown model architecture: 'gemma4'`
+
+Ursache:
+
+- der `llama-cpp`-Container wurde gegen einen zu alten `llama.cpp`-Stand gebaut
+- dadurch kann `gemma-4-E4B-it` (GGUF) nicht geladen werden
+
+Fix:
+
+1. Sicherstellen, dass in `.env` ein gemma4-faehiger Commit gesetzt ist:
+
+```bash
+LLAMA_CPP_COMMIT=3fc65063d9c356510b86fc2f15ca8aea711bfc47
+```
+
+2. `llama-cpp` ohne Cache neu bauen und starten:
+
+```bash
+sudo docker compose --profile llama-cpp build --no-cache llama-cpp
+sudo docker compose --profile llama-cpp up -d llama-cpp
+sudo docker logs --tail=120 paperless-llama-cpp
+```
+
+3. Health pruefen:
+
+```bash
+curl -fsS http://127.0.0.1:18080/health
+```
+
 ## OCR-/Vision-Modell ist korrekt angebunden, aber trotzdem unbrauchbar langsam
 
 Typische Ursachen:
@@ -130,3 +168,34 @@ Pragmatische Loesung:
 - Vision nur fuer kurze PDFs oder seltene Review-Faelle aktivieren
 - kleinere OCR-Kontexte fuer Vision-Tests verwenden
 - staerkere Vision-/OCR-Modelle erst mit GPU-Passthrough oder externer Rechenleistung erneut bewerten
+## `dependency failed to start: ... ollama-rocm has no healthcheck configured`
+
+Ursache:
+
+- ein abhaengiger Dienst nutzt `depends_on: condition: service_healthy`
+- der laufende Ollama-Dienst ist aber `ollama-rocm` ohne `healthcheck`
+
+Fix:
+
+1. Im aktiven Compose-Setup fuer den Ollama-Dienst einen Healthcheck setzen:
+
+```yaml
+services:
+  ollama-rocm:
+    healthcheck:
+      test: ["CMD-SHELL", "ollama list >/dev/null 2>&1"]
+      interval: 30s
+      timeout: 10s
+      retries: 10
+```
+
+2. Stack neu starten:
+
+```bash
+docker compose up -d --force-recreate ollama-rocm
+docker compose up -d paperless-ai-web webserver open-webui
+```
+
+Alternative:
+
+- Wenn kein Healthcheck gewuenscht ist, in den Abhaengigkeiten `condition: service_started` verwenden.

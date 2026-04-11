@@ -8,6 +8,8 @@ COPY docker/open-webui/start-with-bootstrap.sh /usr/local/bin/start-with-bootstr
 COPY docker/open-webui/workflows /opt/paperless-open-webui/workflows
 COPY scripts/openwebui/install_model_profiles.py /opt/paperless-open-webui/install_model_profiles.py
 COPY scripts/openwebui/install_workspace_agent_tools.py /opt/paperless-open-webui/install_workspace_agent_tools.py
+COPY scripts/openwebui/install_image_actions.py /opt/paperless-open-webui/install_image_actions.py
+COPY scripts/openwebui/install_project_path_actions.py /opt/paperless-open-webui/install_project_path_actions.py
 
 RUN chmod 755 /usr/local/bin/start-with-bootstrap.sh
 

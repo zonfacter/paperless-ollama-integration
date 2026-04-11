@@ -10,6 +10,8 @@ Die Weboberflaeche auf Port `3000` ist keine reine Chat-Seite mehr, sondern eine
 - Prompt-Bearbeitung
 - Review einzelner Dokumente
 - Backfill fuer Bestandsdokumente
+- Task-Manager mit GPU-/Systemlast und Dokument-Qualitaetscheck
+- OpenClaw-MCP-Verwaltung (set/show/unset)
 
 ## Arbeitsbereiche
 
@@ -47,6 +49,16 @@ Funktionen:
 - Vision-Seitenlimit, Vision-Timeout und Vision-Tag konfigurieren
 - Prompt laden, aendern und speichern
 
+### Task Manager
+
+Fuer laufende Jobs und Qualitaetskontrolle ohne Shell.
+
+Funktionen:
+
+- Hintergrundjobs laden, aktualisieren, abbrechen, entfernen
+- Live-Systemlast inkl. GPU-Trends, Power-Cap und Stress-Test
+- Qualitaetscheck der letzten Dokumente (OCR-Qualitaet, fehlende Metadaten, Review-Tag, Dubletten)
+
 ### Chat
 
 Direkter Testbereich fuer Modelle ohne Paperless-Lauf.
@@ -56,6 +68,23 @@ Geeignet fuer:
 - kurzer Modellvergleich
 - Prompt-Tests
 - einfache Funktionschecks
+
+### OpenClaw MCP
+
+Fuer Agent-/Coding-Umgebungen mit OpenClaw.
+
+Funktionen:
+
+- OpenClaw-Containerstatus und Health anzeigen
+- MCP-Serverliste laden (`mcp list`)
+- einzelne MCP-Konfiguration anzeigen (`mcp show <name>`)
+- MCP-Server direkt setzen (`mcp set`) inkl. Command, Args und ENV
+- MCP-Server entfernen (`mcp unset <name>`)
+
+Typische Server:
+
+- `filesystem` fuer Workspace-Zugriff
+- `github` fuer Repo-Operationen ueber MCP
 
 ## Layout
 

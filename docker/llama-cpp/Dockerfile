@@ -1,5 +1,8 @@
 FROM debian:trixie
 
+ARG LLAMA_CPP_REPO=https://github.com/ggml-org/llama.cpp.git
+ARG LLAMA_CPP_COMMIT=3fc65063d9c356510b86fc2f15ca8aea711bfc47
+
 RUN apt-get update && apt-get install -y --no-install-recommends \
     build-essential cmake git python3 curl ca-certificates \
     libvulkan-dev vulkan-tools mesa-vulkan-drivers glslang-tools glslc && \
@@ -7,7 +10,10 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 
 WORKDIR /src
 
-RUN git clone https://github.com/ggml-org/llama.cpp.git . && \
+RUN git init . && \
+    git remote add origin "${LLAMA_CPP_REPO}" && \
+    git fetch --depth 1 origin "${LLAMA_CPP_COMMIT}" && \
+    git checkout --detach FETCH_HEAD && \
     cmake -B build -DGGML_VULKAN=ON -DCMAKE_BUILD_TYPE=Release && \
     cmake --build build -j$(nproc) --target llama-server llama-cli
 

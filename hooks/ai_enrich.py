@@ -1057,6 +1057,98 @@ def should_apply(result: dict) -> bool:
         return True
 
 
+def vision_autopilot_enabled() -> bool:
+    return env("PAPERLESS_AI_VISION_AUTOPILOT_ENABLED", "true").lower() in ("1", "true", "yes", "on")
+
+
+def is_pdf_document(document: dict) -> bool:
+    original = str(document.get("original_file_name") or "").lower()
+    if original.endswith(".pdf"):
+        return True
+    archived = str(document.get("archived_file_name") or "").lower()
+    return archived.endswith(".pdf")
+
+
+def page_count_within_limit(document: dict) -> bool:
+    limit = positive_int(env("PAPERLESS_AI_VISION_AUTOPILOT_MAX_PAGES", "2"), 2)
+    try:
+        pages = int(document.get("page_count") or 0)
+    except (TypeError, ValueError):
+        pages = 0
+    if pages <= 0:
+        return True
+    return pages <= limit
+
+
+def should_trigger_vision_precheck(document: dict) -> bool:
+    if not vision_autopilot_enabled():
+        return False
+    if not is_pdf_document(document):
+        return False
+    if not page_count_within_limit(document):
+        return False
+    min_chars = positive_int(env("PAPERLESS_AI_VISION_AUTOPILOT_OCR_MIN_CHARS", "1800"), 1800)
+    content_len = len(str(document.get("content") or "").strip())
+    return content_len <= min_chars
+
+
+def should_trigger_vision_postcheck(document: dict, result: dict) -> bool:
+    if not vision_autopilot_enabled():
+        return False
+    if not is_pdf_document(document):
+        return False
+    if not page_count_within_limit(document):
+        return False
+    try:
+        confidence = float(result.get("confidence") or 0.0)
+    except (TypeError, ValueError):
+        confidence = 0.0
+    min_conf = float(env("PAPERLESS_AI_VISION_AUTOPILOT_MIN_CONFIDENCE", "0.8"))
+    if confidence < min_conf:
+        return True
+    if not clean_name(str(result.get("correspondent", ""))):
+        return True
+    if not clean_name(str(result.get("document_type", ""))):
+        return True
+    title = clean_name(str(result.get("title", "")))
+    return len(title) < 10
+
+
+def run_vision_autopilot(document_id: str) -> tuple[dict | None, dict]:
+    base_url = env("PAPERLESS_AI_WEB_URL", "http://paperless-ai-web:3000").rstrip("/")
+    trigger_timeout = float(env("PAPERLESS_AI_VISION_AUTOPILOT_TRIGGER_TIMEOUT_SECONDS", "90"))
+    poll_timeout = float(env("PAPERLESS_AI_VISION_AUTOPILOT_POLL_TIMEOUT_SECONDS", "180"))
+    poll_interval = float(env("PAPERLESS_AI_VISION_AUTOPILOT_POLL_INTERVAL_SECONDS", "2"))
+    client = HttpClient(base_url)
+
+    start_payload = client.post(
+        f"{base_url}/api/paperless/document/{document_id}/preview",
+        {"use_vision": True},
+        timeout=trigger_timeout,
+    )
+    if not isinstance(start_payload, dict):
+        raise RuntimeError(f"Unexpected preview payload: {start_payload}")
+    proposal = start_payload.get("proposal")
+    preview_job = start_payload.get("preview_job") if isinstance(start_payload.get("preview_job"), dict) else None
+    if isinstance(proposal, dict) and not preview_job:
+        return proposal, {"job": None, "poll_seconds": 0.0}
+    if not preview_job or not preview_job.get("id"):
+        raise RuntimeError("Vision preview did not return a pollable preview_job")
+
+    job_id = str(preview_job["id"])
+    deadline = time.time() + max(10.0, poll_timeout)
+    while time.time() < deadline:
+        state = client.get(f"{base_url}/api/paperless/preview-jobs/{job_id}", timeout=30)
+        if isinstance(state, dict):
+            status = str(state.get("status") or "").strip().lower()
+            if status == "done" and isinstance(state.get("proposal"), dict):
+                return state["proposal"], {"job": job_id, "poll_seconds": round(time.time() - (deadline - poll_timeout), 2)}
+            if status == "error":
+                raise RuntimeError(str(state.get("error") or "Vision preview job failed"))
+        time.sleep(max(0.5, poll_interval))
+    raise RuntimeError(f"Vision preview timeout after {poll_timeout}s (job={job_id})")
+
+
 def main() -> int:
     document_id = env("DOCUMENT_ID")
     api_url = env("PAPERLESS_API_URL")
@@ -1080,15 +1172,61 @@ def main() -> int:
         if isinstance(tag, dict) and looks_like_person_tag(str(tag.get("name", "")))
     ]
 
-    prompt = prompt_for_document(document, sorted(existing_person_tags, key=str.casefold))
     started = time.time()
-    raw_result, response_meta = get_provider_response_details(prompt)
-    result = refine_result(sanitize_result(raw_result), document)
+    response_meta: dict[str, object] = {"provider": "-", "model": "-", "fallback_used": False}
+    result: dict
+    vision_meta = {"used": False, "reason": "", "error": "", "job": None}
+
+    if should_trigger_vision_precheck(document):
+        try:
+            proposal, poll_meta = run_vision_autopilot(document_id)
+            if proposal is None:
+                raise RuntimeError("Vision autopilot returned no proposal")
+            result = refine_result(sanitize_result(proposal), document)
+            response_meta = {
+                "provider": "vision_autopilot",
+                "model": str(proposal.get("_vision_model") or proposal.get("_ocr_model") or proposal.get("_model") or "vision"),
+                "fallback_used": False,
+            }
+            vision_meta = {"used": True, "reason": "precheck", "error": "", "job": poll_meta.get("job")}
+            log(f"Vision autopilot precheck used for document {document_id}")
+        except Exception as exc:
+            vision_meta = {"used": False, "reason": "precheck_failed", "error": str(exc), "job": None}
+            warn(f"Vision autopilot precheck failed for document {document_id}: {exc}")
+            prompt = prompt_for_document(document, sorted(existing_person_tags, key=str.casefold))
+            raw_result, response_meta = get_provider_response_details(prompt)
+            result = refine_result(sanitize_result(raw_result), document)
+    else:
+        prompt = prompt_for_document(document, sorted(existing_person_tags, key=str.casefold))
+        raw_result, response_meta = get_provider_response_details(prompt)
+        result = refine_result(sanitize_result(raw_result), document)
+
+    if (not vision_meta.get("used")) and should_trigger_vision_postcheck(document, result):
+        try:
+            proposal, poll_meta = run_vision_autopilot(document_id)
+            if proposal is None:
+                raise RuntimeError("Vision autopilot returned no proposal")
+            result = refine_result(sanitize_result(proposal), document)
+            response_meta = {
+                "provider": "vision_autopilot",
+                "model": str(proposal.get("_vision_model") or proposal.get("_ocr_model") or proposal.get("_model") or "vision"),
+                "fallback_used": False,
+            }
+            vision_meta = {"used": True, "reason": "postcheck", "error": "", "job": poll_meta.get("job")}
+            log(f"Vision autopilot postcheck used for document {document_id}")
+        except Exception as exc:
+            vision_meta = {"used": False, "reason": "postcheck_failed", "error": str(exc), "job": None}
+            warn(f"Vision autopilot postcheck failed for document {document_id}: {exc}")
+
     tag_meta = {"enabled": False, "model": ""}
-    try:
-        result, tag_meta = apply_tag_review(document, result)
-    except Exception as exc:
-        warn(f"Tag review failed for document {document_id}: {exc}")
+    skip_tag_review_if_vision = env("PAPERLESS_AI_VISION_AUTOPILOT_SKIP_TAG_REVIEW", "true").lower() in ("1", "true", "yes", "on")
+    if vision_meta.get("used") and skip_tag_review_if_vision:
+        tag_meta = {"enabled": False, "model": "skipped_after_vision"}
+    else:
+        try:
+            result, tag_meta = apply_tag_review(document, result)
+        except Exception as exc:
+            warn(f"Tag review failed for document {document_id}: {exc}")
     review_needed, review_reasons = assess_review_flags(result, document)
     result["_review_needed"] = review_needed
     result["_review_reasons"] = review_reasons
@@ -1097,7 +1235,13 @@ def main() -> int:
     if response_meta.get("fallback_used"):
         model_info = f"{model_info} (fallback from {response_meta.get('fallback_from', '-')})"
     tag_model_info = tag_meta.get("model", "-") if tag_meta.get("enabled") else "-"
+    vision_info = "vision=no"
+    if vision_meta.get("used"):
+        vision_info = f"vision=yes({vision_meta.get('reason', '-')})"
+    elif vision_meta.get("error"):
+        vision_info = f"vision=error({vision_meta.get('reason', '-')})"
     log(f"LLM analyzed document {document_id} in {duration}s using {model_info}; tag_review={tag_model_info}")
+    log(f"Vision autopilot status for {document_id}: {vision_info}")
 
     if not should_apply(result):
         log(f"Skipped document {document_id}: confidence below threshold")

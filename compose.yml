@@ -79,7 +79,7 @@ services:
       tika:
         condition: service_started
       ollama:
-        condition: service_healthy
+        condition: service_started
     env_file:
       - ./.env
     environment:
@@ -97,7 +97,7 @@ services:
     ports:
       - "${PAPERLESS_BIND_HOST:-0.0.0.0}:${PAPERLESS_PUBLIC_PORT:-8000}:8000"
     volumes:
-      - ./data/paperless/consume:/usr/src/paperless/consume
+      - ${PAPERLESS_CONSUME_HOST_PATH:-./data/paperless/consume}:/usr/src/paperless/consume
       - ./data/paperless/media:/usr/src/paperless/media
       - ./data/paperless/export:/usr/src/paperless/export
       - ./data/paperless/data:/usr/src/paperless/data
@@ -133,11 +133,14 @@ services:
       PAPERLESS_TIKA_ENABLED: 1
       PAPERLESS_TIKA_GOTENBERG_ENDPOINT: http://gotenberg:3000
       PAPERLESS_TIKA_ENDPOINT: http://tika:9998
-    command: ["python", "manage.py", "document_consumer"]
+    command:
+      - /bin/bash
+      - -lc
+      - mkdir -p /tmp/paperless && python manage.py document_consumer
     healthcheck:
       disable: true
     volumes:
-      - ./data/paperless/consume:/usr/src/paperless/consume
+      - ${PAPERLESS_CONSUME_HOST_PATH:-./data/paperless/consume}:/usr/src/paperless/consume
       - ./data/paperless/media:/usr/src/paperless/media
       - ./data/paperless/export:/usr/src/paperless/export
       - ./data/paperless/data:/usr/src/paperless/data
@@ -172,16 +175,13 @@ services:
       PAPERLESS_TIKA_GOTENBERG_ENDPOINT: http://gotenberg:3000
       PAPERLESS_TIKA_ENDPOINT: http://tika:9998
     command:
-      - celery
-      - --app
-      - paperless
-      - worker
-      - --loglevel
-      - INFO
+      - /bin/bash
+      - -lc
+      - mkdir -p /tmp/paperless && celery --app paperless worker --loglevel INFO
     healthcheck:
       disable: true
     volumes:
-      - ./data/paperless/consume:/usr/src/paperless/consume
+      - ${PAPERLESS_CONSUME_HOST_PATH:-./data/paperless/consume}:/usr/src/paperless/consume
       - ./data/paperless/media:/usr/src/paperless/media
       - ./data/paperless/export:/usr/src/paperless/export
       - ./data/paperless/data:/usr/src/paperless/data
@@ -213,13 +213,9 @@ services:
       PAPERLESS_REDIS: redis://broker:6379
       PAPERLESS_DBHOST: db
     command:
-      - celery
-      - --app
-      - paperless
-      - beat
-      - --loglevel
-      - INFO
-      - --schedule=/tmp/celerybeat-schedule
+      - /bin/bash
+      - -lc
+      - mkdir -p /tmp/paperless && celery --app paperless beat --loglevel INFO --schedule=/tmp/celerybeat-schedule
     healthcheck:
       disable: true
     volumes:
@@ -234,7 +230,7 @@ services:
       - paperless-ai
 
   ollama:
-    image: ollama/ollama:latest
+    image: ollama/ollama:${OLLAMA_IMAGE_TAG:-0.20.2}
     container_name: paperless-ollama
     restart: unless-stopped
     cpus: "${OLLAMA_CPUS:-6.00}"
@@ -245,6 +241,10 @@ services:
       OLLAMA_HOST: ${OLLAMA_HOST}
       OLLAMA_VULKAN: ${OLLAMA_VULKAN:-1}
       OLLAMA_FLASH_ATTENTION: ${OLLAMA_FLASH_ATTENTION:-0}
+      OLLAMA_KEEP_ALIVE: ${OLLAMA_KEEP_ALIVE:-15m}
+      OLLAMA_CONTEXT_LENGTH: ${OLLAMA_CONTEXT_LENGTH:-32768}
+      OLLAMA_MAX_LOADED_MODELS: ${OLLAMA_MAX_LOADED_MODELS:-2}
+      OLLAMA_NUM_PARALLEL: ${OLLAMA_NUM_PARALLEL:-2}
       HSA_OVERRIDE_GFX_VERSION: ${OLLAMA_HSA_OVERRIDE_GFX_VERSION:-9.0.6}
       DRI_PRIME: ${OLLAMA_DRI_PRIME:-pci-0000_04_00_0!}
       MESA_VK_DEVICE_SELECT: ${OLLAMA_MESA_VK_DEVICE_SELECT:-1002:66a1!}
@@ -281,7 +281,7 @@ services:
       webserver:
         condition: service_started
       ollama:
-        condition: service_healthy
+        condition: service_started
     env_file:
       - ./.env
     environment:
@@ -292,6 +292,8 @@ services:
       PAPERLESS_BACKFILL_STATE_PATH: /data/backfill_jobs.json
       PAPERLESS_PROVIDER_CONFIG_PATH: /data/provider_config.json
       PAPERLESS_MODEL_CONFIG_PATH: /data/model_config.json
+      PAPERLESS_BACKFILL_JOB_RETENTION_HOURS: "${PAPERLESS_BACKFILL_JOB_RETENTION_HOURS:-168}"
+      PAPERLESS_BACKFILL_JOB_MAX_ENTRIES: "${PAPERLESS_BACKFILL_JOB_MAX_ENTRIES:-120}"
       PADDLEOCR_API_INSTALL_SCRIPT: /usr/src/paperless-ai/scripts/install-paddleocr-api.sh
     ports:
       - "${PAPERLESS_AI_WEB_BIND_HOST:-0.0.0.0}:${PAPERLESS_AI_WEB_PUBLIC_PORT:-3000}:3000"
@@ -325,7 +327,7 @@ services:
     mem_limit: "${OPEN_WEBUI_MEM_LIMIT:-2g}"
     depends_on:
       ollama:
-        condition: service_healthy
+        condition: service_started
     environment:
       WEBUI_URL: ${OPEN_WEBUI_URL:-http://localhost:8081}
       WEBUI_SECRET_KEY: ${OPEN_WEBUI_SECRET_KEY:-CHANGE_ME_OPEN_WEBUI_SECRET}
@@ -339,7 +341,7 @@ services:
       ENABLE_IMAGE_PROMPT_GENERATION: ${OPEN_WEBUI_ENABLE_IMAGE_PROMPT_GENERATION:-false}
       IMAGE_GENERATION_ENGINE: ${OPEN_WEBUI_IMAGE_GENERATION_ENGINE:-openai}
       IMAGE_GENERATION_MODEL: ${OPEN_WEBUI_IMAGE_GENERATION_MODEL:-gpt-image-1}
-      IMAGE_SIZE: ${OPEN_WEBUI_IMAGE_SIZE:-1024x1024}
+      IMAGE_SIZE: ${OPEN_WEBUI_IMAGE_SIZE:-512x512}
       IMAGES_OPENAI_API_BASE_URL: ${OPEN_WEBUI_IMAGES_OPENAI_API_BASE_URL:-http://openvino-image:8000/v3}
       IMAGES_OPENAI_API_KEY: ${OPEN_WEBUI_IMAGES_OPENAI_API_KEY:-dummy}
       AUTOMATIC1111_BASE_URL: ${OPEN_WEBUI_AUTOMATIC1111_BASE_URL:-}
@@ -350,9 +352,14 @@ services:
       OPEN_WEBUI_COMFYUI_WORKFLOW_FILE: ${OPEN_WEBUI_COMFYUI_WORKFLOW_FILE:-/opt/paperless-open-webui/workflows/comfyui_txt2img_api.json}
       OPEN_WEBUI_COMFYUI_WORKFLOW_NODES_FILE: ${OPEN_WEBUI_COMFYUI_WORKFLOW_NODES_FILE:-/opt/paperless-open-webui/workflows/comfyui_txt2img_nodes.json}
       # RAG / file upload
+      USER_PERMISSIONS_CHAT_FILE_UPLOAD: ${OPEN_WEBUI_USER_PERMISSIONS_CHAT_FILE_UPLOAD:-true}
+      USER_PERMISSIONS_CHAT_WEB_UPLOAD: ${OPEN_WEBUI_USER_PERMISSIONS_CHAT_WEB_UPLOAD:-true}
       RAG_EMBEDDING_ENGINE: ${OPEN_WEBUI_RAG_EMBEDDING_ENGINE:-ollama}
       RAG_EMBEDDING_MODEL: ${OPEN_WEBUI_RAG_EMBEDDING_MODEL:-nomic-embed-text:latest}
       RAG_OLLAMA_BASE_URL: ${OPEN_WEBUI_OLLAMA_BASE_URL:-http://ollama:11434}
+      RAG_FILE_MAX_SIZE: ${OPEN_WEBUI_RAG_FILE_MAX_SIZE:-209715200}
+      RAG_FILE_MAX_COUNT: ${OPEN_WEBUI_RAG_FILE_MAX_COUNT:-40}
+      RAG_ALLOWED_FILE_EXTENSIONS: ${OPEN_WEBUI_RAG_ALLOWED_FILE_EXTENSIONS:-txt,md,pdf,doc,docx,rtf,csv,xls,xlsx,ppt,pptx,json,xml,html}
       PDF_EXTRACT_IMAGES: ${OPEN_WEBUI_PDF_EXTRACT_IMAGES:-True}
       CHUNK_SIZE: ${OPEN_WEBUI_CHUNK_SIZE:-1500}
       CHUNK_OVERLAP: ${OPEN_WEBUI_CHUNK_OVERLAP:-150}
@@ -422,10 +429,10 @@ services:
       HSA_OVERRIDE_GFX_VERSION: ${COMFYUI_AMD_HSA_OVERRIDE_GFX_VERSION:-9.0.6}
       HIP_VISIBLE_DEVICES: ${COMFYUI_AMD_HIP_VISIBLE_DEVICES:-0}
       ROCR_VISIBLE_DEVICES: ${COMFYUI_AMD_ROCR_VISIBLE_DEVICES:-0}
-      PYTORCH_HIP_ALLOC_CONF: ${COMFYUI_AMD_PYTORCH_HIP_ALLOC_CONF:-expandable_segments:True}
+      PYTORCH_HIP_ALLOC_CONF: ${COMFYUI_AMD_PYTORCH_HIP_ALLOC_CONF:-expandable_segments:True,garbage_collection_threshold:0.8}
       COMFYUI_PORT: ${COMFYUI_AMD_PORT:-8188}
       COMFYUI_LISTEN: ${COMFYUI_AMD_LISTEN:-0.0.0.0}
-      COMFYUI_EXTRA_ARGS: ${COMFYUI_AMD_EXTRA_ARGS:---disable-auto-launch}
+      COMFYUI_EXTRA_ARGS: ${COMFYUI_AMD_EXTRA_ARGS:---disable-auto-launch --preview-method none --disable-smart-memory --use-split-cross-attention --fp16-vae}
     expose:
       - "8188"
     volumes:
@@ -433,6 +440,36 @@ services:
       - ./data/comfyui/input:/opt/ComfyUI/input
       - ./data/comfyui/output:/opt/ComfyUI/output
       - ./data/comfyui/custom_nodes:/opt/ComfyUI/custom_nodes
+    group_add:
+      - "${OLLAMA_RENDER_GID:-105}"
+      - "${OLLAMA_VIDEO_GID:-44}"
+    devices:
+      - /dev/kfd:/dev/kfd
+      - /dev/dri:/dev/dri
+    networks:
+      - paperless-ai
+
+  automatic1111-amd:
+    profiles: ["image-amd-a1111"]
+    build:
+      context: .
+      dockerfile: docker/automatic1111-amd/Dockerfile
+    image: paperless-automatic1111-amd:${AUTOMATIC1111_AMD_IMAGE_TAG:-latest}
+    container_name: paperless-automatic1111-amd
+    restart: unless-stopped
+    cpus: "${AUTOMATIC1111_AMD_CPUS:-6.00}"
+    mem_limit: "${AUTOMATIC1111_AMD_MEM_LIMIT:-16g}"
+    environment:
+      HSA_OVERRIDE_GFX_VERSION: ${AUTOMATIC1111_AMD_HSA_OVERRIDE_GFX_VERSION:-9.0.6}
+      HIP_VISIBLE_DEVICES: ${AUTOMATIC1111_AMD_HIP_VISIBLE_DEVICES:-0}
+      ROCR_VISIBLE_DEVICES: ${AUTOMATIC1111_AMD_ROCR_VISIBLE_DEVICES:-0}
+      PYTORCH_HIP_ALLOC_CONF: ${AUTOMATIC1111_AMD_PYTORCH_HIP_ALLOC_CONF:-garbage_collection_threshold:0.6,max_split_size_mb:6144}
+      COMMANDLINE_ARGS: ${AUTOMATIC1111_AMD_COMMAND_ARGS:---listen --port 7860 --api --precision full --no-half --no-half-vae --skip-torch-cuda-test --opt-sub-quad-attention --disable-nan-check}
+    expose:
+      - "7860"
+    volumes:
+      - ./data/comfyui/models:/opt/stable-diffusion-webui/models
+      - ./data/automatic1111/output:/opt/stable-diffusion-webui/outputs
     group_add:
       - "${OLLAMA_RENDER_GID:-105}"
       - "${OLLAMA_VIDEO_GID:-44}"
@@ -472,6 +509,9 @@ services:
     build:
       context: ./docker/llama-cpp
       dockerfile: Dockerfile
+      args:
+        LLAMA_CPP_REPO: ${LLAMA_CPP_REPO:-https://github.com/ggml-org/llama.cpp.git}
+        LLAMA_CPP_COMMIT: ${LLAMA_CPP_COMMIT:-3fc65063d9c356510b86fc2f15ca8aea711bfc47}
     container_name: paperless-llama-cpp
     restart: unless-stopped
     cpus: "${LLAMA_CPP_CPUS:-6.00}"
@@ -486,10 +526,58 @@ services:
       --threads ${LLAMA_CPP_THREADS:-4}
       --reasoning-budget ${LLAMA_CPP_REASONING_BUDGET:-0}
       --log-prefix
+    ports:
+      - "${LLAMA_CPP_BIND_HOST:-0.0.0.0}:${LLAMA_CPP_PUBLIC_PORT:-18080}:8080"
+    healthcheck:
+      test: ["CMD-SHELL", "curl -fsS http://127.0.0.1:8080/health >/dev/null || exit 1"]
+      interval: 20s
+      timeout: 5s
+      retries: 10
+      start_period: 30s
     volumes:
       - ${LLAMA_CPP_MODELS_PATH:-/volume1/docker/llama-cpp-test/models}:/models:ro
     devices:
       - /dev/dri:/dev/dri
+    networks:
+      - paperless-ai
+
+  opencode:
+    profiles: ["opencode"]
+    build:
+      context: .
+      dockerfile: docker/opencode/Dockerfile
+    image: paperless-opencode:${OPENCODE_IMAGE_TAG:-latest}
+    container_name: paperless-opencode
+    restart: unless-stopped
+    cpus: "${OPENCODE_CPUS:-2.00}"
+    mem_limit: "${OPENCODE_MEM_LIMIT:-2g}"
+    depends_on:
+      ollama:
+        condition: service_started
+    stdin_open: true
+    tty: true
+    command:
+      - opencode
+      - serve
+      - --hostname
+      - ${OPENCODE_HOSTNAME:-0.0.0.0}
+      - --port
+      - ${OPENCODE_PORT:-4096}
+    environment:
+      HOME: /home/opencode
+      OPENAI_API_KEY: ${OPENCODE_OPENAI_API_KEY:-dummy}
+      OPENAI_BASE_URL: ${OPENCODE_OPENAI_BASE_URL:-http://llama-cpp:8080/v1}
+      OLLAMA_HOST: ${OPENCODE_OLLAMA_HOST:-http://ollama:11434}
+      OPENROUTER_API_KEY: ${OPENROUTER_API_KEY:-}
+      OPENCODE_DEFAULT_MODEL: ${OPENCODE_DEFAULT_MODEL:-orfree/gpt-oss-20b-free}
+      OPENCODE_DEFAULT_AGENT: ${OPENCODE_DEFAULT_AGENT:-build}
+      OPENCODE_SERVER_USERNAME: ${OPENCODE_SERVER_USERNAME:-opencode}
+      OPENCODE_SERVER_PASSWORD: ${OPENCODE_SERVER_PASSWORD:-}
+    ports:
+      - "${OPENCODE_PORT:-4096}:${OPENCODE_PORT:-4096}"
+    volumes:
+      - ${OPENCODE_WORKSPACE_HOST_PATH:-/volume4/AI-TEST/workspace/opencode}:/workspace:rw
+      - ${OPENCODE_CONFIG_HOST_PATH:-./data/opencode}:/home/opencode/.config/opencode:rw
     networks:
       - paperless-ai
 

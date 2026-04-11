@@ -78,6 +78,8 @@ Repository root is assumed.
 - review bind hosts
 - review GPU-related defaults
 - review image backend settings
+- if Open WebUI workspace visibility matters on NAS appliances, set a file-manager-visible host path
+  - example for the tested UGREEN setup: `OPEN_WEBUI_WORKSPACE_HOST_PATH=/volume4/AI-TEST/workspace`
 
 3. Validate:
 

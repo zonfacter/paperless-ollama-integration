@@ -263,6 +263,8 @@ Wichtige Einordnung:
 - `Open WebUI` ersetzt nicht `paperless-ai-web`
 - `paperless-ai-web` bleibt fuer Review, Task Manager und Backfill zustaendig
 - `Open WebUI` ist fuer Chat, Modellvergleich und spaetere optionale zweite Runtime-Anbindung gedacht
+- wenn der Agent-Workspace im NAS-Dateimanager sichtbar sein soll, nutze fuer `OPEN_WEBUI_WORKSPACE_HOST_PATH` einen sichtbaren Share
+- fuer das hier getestete UGREEN-Setup ist `/volume4/AI-TEST/workspace` der empfohlene sichtbare Arbeitsbereich
 
 Siehe auch:
 

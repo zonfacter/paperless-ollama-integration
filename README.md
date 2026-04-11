@@ -41,10 +41,12 @@ Der aktuelle Stand dieses Projekts bildet eine funktionierende Installation mit 
 - `paperless-ngx` als native Systemd-Installation
 - `Ollama` lokal auf `127.0.0.1:11434`
 - konfigurierbare lokale Modelle in `Ollama`
-- produktiv erprobte Varianten:
-  - `qwen3.5:9b` fuer maximale Qualitaet
-  - `qwen3.5:4b` als CPU-Kompromiss
-  - `qwen2.5:7b-instruct` als robuste Referenz
+- produktiv erprobte Varianten (Vulkan/MI50):
+  - `qwen2.5-coder:7b` (schnelles Coding)
+  - `qwen2.5-coder:14b` (tiefe Coding-Analyse)
+  - `qwen2.5:14b` (komplexe Sach-/Rechtstexte, lange Zusammenhaenge)
+  - `qwen2.5:3b` (schnelles Tagging/Korrespondenz)
+  - `deepseek-ocr:3b` (Vision/OCR-Aufgaben)
 - Hook nach erfolgreichem Dokumentimport
 - automatische Vergabe von:
   - Titel
@@ -53,16 +55,19 @@ Der aktuelle Stand dieses Projekts bildet eine funktionierende Installation mit 
   - Tags
 - Review- und Steueroberflaeche auf Port `3000`
 - getrennte Preview-/Vision-Regeln fuer die Review-Oberflaeche
+- optionaler Vision-Autopilot im Hook fuer scanlastige PDFs (OCR + Vision)
 - OCR fuer Scan-PDFs mit `force`, `deu+eng` und optionalem `tessdata_best`
 
 Fuer den NAS-Pfad gilt zusaetzlich:
 
-- `ollama` auf Intel Vulkan ist fuer kleine Modelle brauchbar, fuer groessere Modelle aber derzeit nicht durchgehend zuverlaessig
-- `qwen3.5:2b` ist auf der Iris Xe ein brauchbarer GPU-Kandidat fuer schnelle Vorschlaege
-- `qwen3.5:4b` bleibt auf CPU der beste praktikable Qualitaetskompromiss
+- Vulkan-first auf MI50 ist derzeit die robuste Betriebsstrategie
+- `qwen3.5:*` kann auf Vulkan laufen, ist aber fuer Agent-Workflows nicht der bevorzugte Standard
 - ein separater `llama.cpp`-Pfad mit kompatiblen externen GGUFs ist auf dem NAS erfolgreich verifiziert
 - `Open WebUI` kann als optionaler Chat-/Vergleichsdienst neben `paperless-ai-web` betrieben werden
+- `Open WebUI` ist fuer Datei-Uploads (u. a. `txt`, `md`, `pdf`, `doc`, `docx`, `pptx`) mit festen RAG-Limits vorkonfiguriert
 - Details dazu stehen in [docs/NAS_RUNTIME_FINDINGS.md](docs/NAS_RUNTIME_FINDINGS.md)
+- Modellrollen und konkrete Defaults stehen in [docs/VULKAN_MODEL_STRATEGY.md](docs/VULKAN_MODEL_STRATEGY.md)
+- Open-WebUI-Routing und Upload-Details stehen in [docs/OPEN_WEBUI.md](docs/OPEN_WEBUI.md)
 
 ## Projektinhalt
 
@@ -79,6 +84,8 @@ Fuer den NAS-Pfad gilt zusaetzlich:
     - Prompt-Bearbeitung
     - Review einzelner Dokumente
     - Backfill fuer Bestandsdokumente
+    - Task-Manager mit GPU-Trends und Qualitaetscheck der letzten Dokumente
+    - OpenClaw-MCP-Verwaltung (set/show/unset)
   - uebernimmt dieselbe Ollama-Thread-Begrenzung fuer Chat, Preview und Vision
 - `systemd/paperless-scheduler.service`
   - korrigierte Scheduler-Unit auf `celery beat`
@@ -92,12 +99,20 @@ Fuer den NAS-Pfad gilt zusaetzlich:
   - gefuehrter Installer fuer Hook-/Prompt-Integration in native und einfache Docker-basierte Paperless-Setups
 - `scripts/bootstrap-nas-stack.sh`
   - Scaffold- und Validierungsskript fuer den vollstaendigen NAS-/Compose-Stack dieses Repos
+- `scripts/set-ollama-rocm-profile.sh`
+  - schaltet per Profil zwischen `rocm-stable` und `rocm-next` fuer Ollama/MI50 um
+- `scripts/nas/run_ollama_benchmark.py`
+  - fuehrt reproduzierbare Modell-/Power-Benchmarks aus und schreibt JSON, CSV und Markdown
 - `scripts/configure-paperless-ai-ollama.sh`
   - Konfigurationshilfe fuer `paperless.conf`
 - `docs/`
   - Installations-, Betriebs- und Sicherheitsdokumentation
   - NAS-Runtime-Befunde und Modellvergleiche in [docs/NAS_RUNTIME_FINDINGS.md](docs/NAS_RUNTIME_FINDINGS.md)
   - optionale `Open WebUI`-Integration in [docs/OPEN_WEBUI.md](docs/OPEN_WEBUI.md)
+  - Major-Release-Aufteilung in [docs/MAJOR_RELEASE_PLAN.md](docs/MAJOR_RELEASE_PLAN.md)
+  - MI50-ROCm-Fork- und Teststrategie in [docs/ROCM_FORK_PLAN.md](docs/ROCM_FORK_PLAN.md)
+  - ROCm-Profil-Umschaltung in [docs/ROCM_PROFILES.md](docs/ROCM_PROFILES.md)
+  - Benchmark-Durchfuehrung und Veroeffentlichung in [docs/BENCHMARKING.md](docs/BENCHMARKING.md)
 - `docker/paddleocr-api/`
   - optionaler `PaddleOCR`-API-Container fuer OCR-Experimente und spaetere Integration
 - `scripts/install-paddleocr-api.sh`
@@ -180,6 +195,11 @@ Details dazu stehen in [docs/NAS_DEPLOYMENT.md](docs/NAS_DEPLOYMENT.md).
   - nur fehlende Metadaten
   - alle Dokumente
   - nur ausgewaehlte Dokumente
+- Port `3000` bietet im `Task Manager` zusaetzlich einen Qualitaetscheck der letzten Dokumente:
+  - OCR-Qualitaet (Zeichenumfang)
+  - fehlende Metadaten
+  - Review-Tag-Anteil
+  - potenzielle Dubletten
 
 ## Wichtige Pfade im produktiven Aufbau
 
@@ -289,6 +309,7 @@ Kurz gesagt:
 - [PROMPTS](docs/PROMPTS.md)
 - [SECURITY](docs/SECURITY.md)
 - [WEB_UI](docs/WEB_UI.md)
+- [OPENCLAW](docs/OPENCLAW.md)
 - [UI_NOTES](docs/UI_NOTES.md)
 - [TROUBLESHOOTING](docs/TROUBLESHOOTING.md)
 - [PADDLEOCR_API](docs/PADDLEOCR_API.md)

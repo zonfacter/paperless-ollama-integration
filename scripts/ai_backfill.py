@@ -53,7 +53,31 @@ def iter_documents(api_url: str, token: str, query: str | None) -> list[dict]:
     return docs
 
 
-def should_include(doc: dict, args: argparse.Namespace) -> bool:
+def find_tag_id_by_name(api_url: str, token: str, tag_name: str) -> int | None:
+    params = {"page_size": 100, "ordering": "id"}
+    next_url = f"{api_url.rstrip('/')}/api/tags/?{urllib.parse.urlencode(params)}"
+    wanted = tag_name.strip().lower()
+    while next_url:
+        payload = fetch_json(next_url, token)
+        if not isinstance(payload, dict) or "results" not in payload:
+            raise RuntimeError(f"Unexpected tags response: {payload}")
+        for tag in payload["results"]:
+            if str(tag.get("name", "")).strip().lower() == wanted:
+                try:
+                    return int(tag["id"])
+                except Exception:
+                    continue
+        next_url = payload.get("next")
+    return None
+
+
+def should_include(
+    doc: dict,
+    args: argparse.Namespace,
+    *,
+    review_tag_id: int | None = None,
+    skip_reviewed: bool = False,
+) -> bool:
     doc_id = int(doc["id"])
     if args.document_id and doc_id not in args.document_id:
         return False
@@ -62,6 +86,10 @@ def should_include(doc: dict, args: argparse.Namespace) -> bool:
     if args.to_id is not None and doc_id > args.to_id:
         return False
     if args.only_missing_metadata:
+        if skip_reviewed and review_tag_id is not None:
+            tag_ids = doc.get("tags") or []
+            if isinstance(tag_ids, list) and review_tag_id in tag_ids:
+                return False
         if doc.get("correspondent") and doc.get("document_type") and doc.get("tags"):
             return False
     return True
@@ -103,8 +131,31 @@ def main() -> int:
         print(f"Hook not found: {hook_path}", file=sys.stderr)
         return 2
 
+    skip_reviewed_raw = env("PAPERLESS_AI_BACKFILL_SKIP_REVIEWED", "1") or "1"
+    skip_reviewed = skip_reviewed_raw.strip().lower() not in {"0", "false", "no", "off"}
+    review_tag_name = env("PAPERLESS_AI_REVIEW_TAG_NAME", "KI Nachpruefen")
+    review_tag_id: int | None = None
+    if args.only_missing_metadata and skip_reviewed and review_tag_name:
+        try:
+            review_tag_id = find_tag_id_by_name(api_url, token, review_tag_name)
+            if review_tag_id is None:
+                log(f"Review tag '{review_tag_name}' not found; skip-reviewed guard disabled.")
+            else:
+                log(f"Skip-reviewed guard active for tag '{review_tag_name}' (id={review_tag_id}).")
+        except Exception as exc:
+            log(f"Could not resolve review tag '{review_tag_name}': {exc}")
+
     documents = iter_documents(api_url, token, args.query)
-    selected = [doc for doc in documents if should_include(doc, args)]
+    selected = [
+        doc
+        for doc in documents
+        if should_include(
+            doc,
+            args,
+            review_tag_id=review_tag_id,
+            skip_reviewed=skip_reviewed,
+        )
+    ]
     if args.limit and args.limit > 0:
         selected = selected[: args.limit]
 

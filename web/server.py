@@ -17,6 +17,7 @@ import urllib.parse
 import urllib.request
 import uuid
 import socket
+import sys
 from collections import deque
 from pathlib import Path
 from http.server import BaseHTTPRequestHandler
@@ -45,6 +46,8 @@ PREVIEW_JOBS_LOCK = threading.Lock()
 BACKFILL_JOBS: dict[str, dict] = {}
 BACKFILL_JOBS_LOCK = threading.Lock()
 BACKFILL_LATEST_JOB_ID: str | None = None
+BACKFILL_JOB_RETENTION_HOURS = max(int(os.getenv("PAPERLESS_BACKFILL_JOB_RETENTION_HOURS", "168") or "168"), 0)
+BACKFILL_JOB_MAX_ENTRIES = max(int(os.getenv("PAPERLESS_BACKFILL_JOB_MAX_ENTRIES", "120") or "120"), 10)
 SYSTEM_HISTORY_SAMPLES = max(int(os.getenv("PAPERLESS_SYSTEM_HISTORY_SAMPLES", "600") or "600"), 10)
 SYSTEM_HISTORY_INTERVAL_SECONDS = max(float(os.getenv("PAPERLESS_SYSTEM_HISTORY_INTERVAL_SECONDS", "1") or "1"), 0.5)
 GPU_WARN_TEMP_C = float(os.getenv("PAPERLESS_GPU_WARN_TEMP_C", "78") or "78")
@@ -57,6 +60,58 @@ GPU_POWER_CAP_PRESETS = [
 ]
 GPU_POWER_CAP_STATE_PATH = Path(os.getenv("PAPERLESS_GPU_POWER_CAP_STATE_PATH", "/data/mi50-power-cap.env"))
 BENCHMARK_RESULTS_PATH = Path(os.getenv("PAPERLESS_BENCHMARK_RESULTS_PATH", "/data/mi50-benchmark-results.json"))
+IMAGE_PRESET_DEFAULT = (os.getenv("PAPERLESS_IMAGE_PRESET_DEFAULT", "balanced") or "balanced").strip().lower()
+IMAGE_PRESETS = [
+    {
+        "id": "fast",
+        "label": "Fast",
+        "width": 1024,
+        "height": 576,
+        "description": "Schnellster alltagstauglicher 16:9-Lauf mit niedriger Wartezeit.",
+        "max_expected_seconds": 35,
+    },
+    {
+        "id": "balanced",
+        "label": "Balanced",
+        "width": 1536,
+        "height": 864,
+        "description": "Empfohlenes Qualitaetsprofil fuer schwere Motive auf der MI50.",
+        "max_expected_seconds": 90,
+    },
+    {
+        "id": "max",
+        "label": "Max",
+        "width": 1920,
+        "height": 1080,
+        "description": "Nur fuer leichtere Prompts oder nach frischem Backend-Reset.",
+        "max_expected_seconds": 120,
+    },
+]
+IMAGE_BACKEND_CONTAINERS = [
+    {
+        "id": "automatic1111",
+        "label": "AUTOMATIC1111 AMD",
+        "container_name": "paperless-automatic1111-amd",
+        "role": "Standard",
+        "notes": "Aktueller AMD-Bildpfad auf der MI50.",
+    },
+    {
+        "id": "comfyui",
+        "label": "ComfyUI AMD",
+        "container_name": "paperless-comfyui-amd",
+        "role": "Experimentell",
+        "notes": "Im Repo vorhanden, lokal auf gfx906 derzeit nicht stabil genug.",
+    },
+    {
+        "id": "openvino",
+        "label": "OpenVINO iGPU",
+        "container_name": "paperless-openvino-image",
+        "role": "Experimentell",
+        "notes": "Nur als alternativer Intel-iGPU-Pfad.",
+    },
+]
+OPENCLAW_CONTAINER_NAME = (os.getenv("PAPERLESS_OPENCLAW_CONTAINER", "openclaw-gateway") or "openclaw-gateway").strip()
+OPENCLAW_BIN = (os.getenv("PAPERLESS_OPENCLAW_BIN", "openclaw") or "openclaw").strip()
 STRESS_TEST_DEFAULT_MODEL = os.getenv("PAPERLESS_STRESS_TEST_DEFAULT_MODEL", "qwen2.5-coder:14b").strip() or "qwen2.5-coder:14b"
 STRESS_TEST_DEFAULT_DURATION_SECONDS = max(int(os.getenv("PAPERLESS_STRESS_TEST_DEFAULT_DURATION_SECONDS", "180") or "180"), 30)
 STRESS_TEST_DEFAULT_NUM_PREDICT = max(int(os.getenv("PAPERLESS_STRESS_TEST_DEFAULT_NUM_PREDICT", "512") or "512"), 64)
@@ -235,6 +290,12 @@ HTML = """<!doctype html>
     }
     .nav-btn[data-view-target="control-view"]::before {
       background: linear-gradient(180deg, rgba(6, 148, 162, 0.42), rgba(6, 148, 162, 0.16));
+    }
+    .nav-btn[data-view-target="image-view"]::before {
+      background: linear-gradient(180deg, rgba(236, 72, 153, 0.42), rgba(236, 72, 153, 0.16));
+    }
+    .nav-btn[data-view-target="openclaw-view"]::before {
+      background: linear-gradient(180deg, rgba(217, 119, 6, 0.42), rgba(217, 119, 6, 0.16));
     }
     .nav-btn[data-view-target="chat-view"]::before {
       background: linear-gradient(180deg, rgba(168, 85, 247, 0.42), rgba(168, 85, 247, 0.16));
@@ -605,6 +666,42 @@ HTML = """<!doctype html>
       padding: 22px 16px;
       color: var(--muted);
       font-size: 14px;
+    }
+    .task-job-table {
+      width: 100%;
+      border-collapse: collapse;
+      min-width: 780px;
+      font-size: 13px;
+    }
+    .task-job-table th,
+    .task-job-table td {
+      padding: 10px 12px;
+      border-top: 1px solid rgba(215,204,187,0.6);
+      text-align: left;
+      vertical-align: middle;
+    }
+    .task-job-table thead th {
+      border-top: 0;
+      background: rgba(248,250,252,0.85);
+      color: var(--muted);
+      font-size: 12px;
+      font-weight: 700;
+      letter-spacing: 0.03em;
+      text-transform: uppercase;
+      position: sticky;
+      top: 0;
+      z-index: 1;
+    }
+    .task-job-row {
+      cursor: pointer;
+    }
+    .task-job-row.active {
+      background: rgba(11, 107, 203, 0.08);
+    }
+    .task-job-id {
+      font-family: "SFMono-Regular", "Consolas", monospace;
+      font-size: 12px;
+      color: #344054;
     }
     .pill {
       display: inline-flex;
@@ -1210,6 +1307,14 @@ HTML = """<!doctype html>
               Steuerung
               <small>Modelle, Prompt, OCR-Kontext, Timeout und Fallback verwalten.</small>
             </button>
+            <button class="nav-btn" data-view-target="image-view" type="button">
+              Image Backend
+              <small>Bild-Presets, Render-Status und gezielter Reset fuer den Bilddienst.</small>
+            </button>
+            <button class="nav-btn" data-view-target="openclaw-view" type="button">
+              OpenClaw MCP
+              <small>MCP-Server (z. B. github/filesystem) direkt aus der UI setzen und pruefen.</small>
+            </button>
             <button class="nav-btn" data-view-target="chat-view" type="button">
               Chat
               <small>Direkte Modelltests im Browser ohne Paperless-Lauf.</small>
@@ -1466,9 +1571,25 @@ HTML = """<!doctype html>
                 </div>
                 <div class="detail-grid">
                   <div class="detail-card">
+                    <h3>Qualitaetscheck letzte Dokumente</h3>
+                    <div class="detail-sub">Schneller Audit fuer OCR-Qualitaet, fehlende Metadaten, Review-Tags und potentielle Dubletten.</div>
+                    <div class="actions">
+                      <button id="tasks-quality-refresh" class="secondary">Qualitaetscheck aktualisieren</button>
+                    </div>
+                    <div id="tasks-quality-status" class="statusline">Qualitaetscheck wird geladen...</div>
+                    <div id="tasks-quality-summary" class="meta-table">
+                      <div class="doc-empty">Noch keine Qualitaetsdaten vorhanden.</div>
+                    </div>
+                    <div id="tasks-quality-table" class="benchmark-table-wrap">
+                      <div class="doc-empty">Noch keine Qualitaetsdaten vorhanden.</div>
+                    </div>
+                  </div>
+                </div>
+                <div class="detail-grid">
+                  <div class="detail-card">
                     <h3>Hintergrundjobs</h3>
                     <div class="detail-sub">Die neuesten Backfill-Laeufe mit Status, Dokumentanzahl und Startzeit.</div>
-                    <div id="tasks-list" class="doc-list">
+                    <div id="tasks-list" class="benchmark-table-wrap">
                       <div class="doc-empty">Noch keine Hintergrundjobs bekannt.</div>
                     </div>
                   </div>
@@ -1546,6 +1667,75 @@ HTML = """<!doctype html>
                     <h3>Reset-Ausgabe</h3>
                     <div class="detail-sub">Letzte Rueckmeldung des Neustarts. Nuetzlich, wenn der Runner haengt oder Open WebUI traege wirkt.</div>
                     <div id="ollama-runner-log" class="logbox">Bereit.</div>
+                  </div>
+                </div>
+              </div>
+            </section>
+            <section id="image-view" class="view">
+              <div class="section">
+                <div class="section-head">
+                  <div>
+                    <h2>Image Backend</h2>
+                    <p>
+                      Ueberwache den aktiven Bilddienst, nutze feste 16:9-Aufloesungsprofile und
+                      setze den Render-Container bei Fragmentierung oder Out-of-Memory gezielt zurueck.
+                    </p>
+                  </div>
+                  <div class="summary-bar">
+                    <span class="pill">Presets</span>
+                    <span class="pill">Status</span>
+                    <span class="pill">Reset</span>
+                  </div>
+                </div>
+                <div class="provider-diagram">
+                  <div class="flow-node active">
+                    <strong>Fast</strong>
+                    <span>1024x576 fuer kurze Wartezeit und schnelle Tests.</span>
+                  </div>
+                  <div class="flow-arrow">→</div>
+                  <div class="flow-node active">
+                    <strong>Balanced</strong>
+                    <span>1536x864 als empfohlenes MI50-Profil fuer schwere Prompts.</span>
+                  </div>
+                  <div class="flow-arrow">→</div>
+                  <div class="flow-node active">
+                    <strong>Max</strong>
+                    <span>1920x1080 nur fuer leichtere Motive oder nach frischem Reset.</span>
+                  </div>
+                </div>
+                <div class="actions">
+                  <button id="image-backend-refresh" class="secondary">Status aktualisieren</button>
+                  <button id="image-backend-reset" class="secondary">Aktiven Bilddienst resetten</button>
+                </div>
+                <div id="image-backend-status" class="statusline">Bilddienst-Status wird geladen...</div>
+                <div class="detail-grid">
+                  <div class="detail-card">
+                    <h3>Preset-Empfehlung</h3>
+                    <div class="detail-sub">Empfohlene 16:9-Stufen fuer den AMD-Bildpfad mit klarer Laufzeitgrenze.</div>
+                    <div id="image-backend-presets" class="meta-table">
+                      <div class="doc-empty">Presets werden geladen...</div>
+                    </div>
+                  </div>
+                  <div class="detail-card">
+                    <h3>Backend-Status</h3>
+                    <div class="detail-sub">Containerzustand, Health und aktiver Bildpfad wie beim Ollama-Runner.</div>
+                    <div id="image-backend-meta" class="meta-table">
+                      <div class="doc-empty">Statusdaten werden geladen...</div>
+                    </div>
+                  </div>
+                </div>
+                <div class="detail-grid">
+                  <div class="detail-card">
+                    <h3>Verfuegbare Bilddienste</h3>
+                    <div class="detail-sub">Standard-, Fallback- und experimentelle Dienste fuer Open WebUI.</div>
+                    <div id="image-backend-list" class="doc-list">
+                      <div class="doc-empty">Bilddienste werden geladen...</div>
+                    </div>
+                  </div>
+                  <div class="detail-card">
+                    <h3>Reset-Ausgabe</h3>
+                    <div class="detail-sub">Letzte Rueckmeldung des Bilddienst-Resets. Nuetzlich bei HIP OOM oder fragmentiertem VRAM.</div>
+                    <div id="image-backend-log" class="logbox">Bereit.</div>
                   </div>
                 </div>
               </div>
@@ -2053,6 +2243,79 @@ HTML = """<!doctype html>
                 <div id="provider-test-output" class="logbox">Noch kein Verbindungstest ausgefuehrt.</div>
               </div>
             </section>
+            <section id="openclaw-view" class="view">
+              <div class="section">
+                <div class="section-head">
+                  <div>
+                    <h2>OpenClaw MCP Verwaltung</h2>
+                    <p>
+                      Setze und pruefe MCP-Server fuer OpenClaw direkt in der Weboberflaeche.
+                      So kannst du z. B. GitHub und Filesystem ohne Shell nachpflegen.
+                    </p>
+                  </div>
+                  <div class="summary-bar">
+                    <span class="pill">mcp list/show</span>
+                    <span class="pill">mcp set/unset</span>
+                    <span class="pill">OpenClaw Gateway</span>
+                  </div>
+                </div>
+                <div class="actions">
+                  <button id="openclaw-refresh" class="secondary">Status aktualisieren</button>
+                  <button id="openclaw-mcp-show" class="secondary">MCP anzeigen</button>
+                  <button id="openclaw-mcp-unset" class="secondary">MCP entfernen</button>
+                </div>
+                <div id="openclaw-status" class="statusline">OpenClaw-Status wird geladen...</div>
+                <div class="detail-grid">
+                  <div class="detail-card">
+                    <h3>Gateway Status</h3>
+                    <div id="openclaw-meta" class="meta-table">
+                      <div class="doc-empty">Statusdaten werden geladen...</div>
+                    </div>
+                  </div>
+                  <div class="detail-card">
+                    <h3>MCP Server</h3>
+                    <div class="field">
+                      <label for="openclaw-mcp-name">Servername</label>
+                      <input id="openclaw-mcp-name" type="text" placeholder="github">
+                      <small>Existierenden Namen fuer Show/Unset eintragen.</small>
+                    </div>
+                    <div id="openclaw-mcp-list" class="doc-list">
+                      <div class="doc-empty">Noch keine MCP-Liste geladen.</div>
+                    </div>
+                  </div>
+                </div>
+                <div class="detail-grid">
+                  <div class="detail-card">
+                    <h3>MCP Setzen</h3>
+                    <div class="config-grid">
+                      <div class="field">
+                        <label for="openclaw-mcp-set-name">Name</label>
+                        <input id="openclaw-mcp-set-name" type="text" placeholder="github">
+                      </div>
+                      <div class="field">
+                        <label for="openclaw-mcp-command">Command</label>
+                        <input id="openclaw-mcp-command" type="text" placeholder="npx">
+                      </div>
+                    </div>
+                    <div class="field">
+                      <label for="openclaw-mcp-args">Args (eine Zeile pro Argument)</label>
+                      <textarea id="openclaw-mcp-args" class="prompt-box" style="min-height:120px" placeholder="-y&#10;@modelcontextprotocol/server-github"></textarea>
+                    </div>
+                    <div class="field">
+                      <label for="openclaw-mcp-env">ENV als JSON (optional)</label>
+                      <textarea id="openclaw-mcp-env" class="prompt-box" style="min-height:120px" placeholder='{"GITHUB_PERSONAL_ACCESS_TOKEN":"__SET_ME__"}'></textarea>
+                    </div>
+                    <div class="actions">
+                      <button id="openclaw-mcp-set">MCP speichern</button>
+                    </div>
+                  </div>
+                  <div class="detail-card">
+                    <h3>CLI Ausgabe</h3>
+                    <div id="openclaw-mcp-log" class="logbox">Bereit.</div>
+                  </div>
+                </div>
+              </div>
+            </section>
             <section id="chat-view" class="view">
               <div class="provider-diagram" style="margin: 22px 22px 0;">
                 <div class="flow-node active">
@@ -2166,6 +2429,10 @@ HTML = """<!doctype html>
     const tasksDetailMetaEl = document.getElementById('tasks-detail-meta');
     const tasksDetailLogEl = document.getElementById('tasks-detail-log');
     const tasksSystemMetricsEl = document.getElementById('tasks-system-metrics');
+    const tasksQualityRefreshBtn = document.getElementById('tasks-quality-refresh');
+    const tasksQualityStatusEl = document.getElementById('tasks-quality-status');
+    const tasksQualitySummaryEl = document.getElementById('tasks-quality-summary');
+    const tasksQualityTableEl = document.getElementById('tasks-quality-table');
     const docSearchEl = document.getElementById('doc-search');
     const docLimitEl = document.getElementById('doc-limit');
     const docRefreshBtn = document.getElementById('doc-refresh');
@@ -2217,6 +2484,26 @@ HTML = """<!doctype html>
     const ollamaRunnerMetaEl = document.getElementById('ollama-runner-meta');
     const ollamaRunnerListEl = document.getElementById('ollama-runner-list');
     const ollamaRunnerLogEl = document.getElementById('ollama-runner-log');
+    const imageBackendRefreshBtn = document.getElementById('image-backend-refresh');
+    const imageBackendResetBtn = document.getElementById('image-backend-reset');
+    const imageBackendStatusEl = document.getElementById('image-backend-status');
+    const imageBackendMetaEl = document.getElementById('image-backend-meta');
+    const imageBackendListEl = document.getElementById('image-backend-list');
+    const imageBackendLogEl = document.getElementById('image-backend-log');
+    const imageBackendPresetsEl = document.getElementById('image-backend-presets');
+    const openclawRefreshBtn = document.getElementById('openclaw-refresh');
+    const openclawMcpShowBtn = document.getElementById('openclaw-mcp-show');
+    const openclawMcpUnsetBtn = document.getElementById('openclaw-mcp-unset');
+    const openclawMcpSetBtn = document.getElementById('openclaw-mcp-set');
+    const openclawStatusEl = document.getElementById('openclaw-status');
+    const openclawMetaEl = document.getElementById('openclaw-meta');
+    const openclawMcpListEl = document.getElementById('openclaw-mcp-list');
+    const openclawMcpLogEl = document.getElementById('openclaw-mcp-log');
+    const openclawMcpNameEl = document.getElementById('openclaw-mcp-name');
+    const openclawMcpSetNameEl = document.getElementById('openclaw-mcp-set-name');
+    const openclawMcpCommandEl = document.getElementById('openclaw-mcp-command');
+    const openclawMcpArgsEl = document.getElementById('openclaw-mcp-args');
+    const openclawMcpEnvEl = document.getElementById('openclaw-mcp-env');
     const navButtons = Array.from(document.querySelectorAll('[data-view-target]'));
     const views = Array.from(document.querySelectorAll('.view'));
     const layoutSidebarBtn = document.getElementById('layout-sidebar');
@@ -3333,24 +3620,39 @@ HTML = """<!doctype html>
         tasksListEl.innerHTML = '<div class="doc-empty">Noch keine Hintergrundjobs bekannt.</div>';
         return;
       }
-      tasksListEl.innerHTML = jobs.map(job => {
-        const countText = job.document_count ? `${job.document_count} Dokumente` : 'Dokumentanzahl unbekannt';
-        const startedText = job.started_at || 'Startzeit unbekannt';
-        const statusText = job.status || 'unbekannt';
-        const statusClass = String(statusText).toLowerCase().replace(/[^a-z0-9_-]/g, '');
+      const rows = jobs.map(job => {
+        const statusText = String(job.status || 'unbekannt');
+        const statusClass = statusText.toLowerCase().replace(/[^a-z0-9_-]/g, '');
+        const docCount = formatValue(job.document_count);
+        const startedText = formatValue(job.started_at);
+        const finishedText = formatValue(job.finished_at);
         const activeClass = activeTaskJobId === job.id ? ' active' : '';
         return `
-          <button class="doc-row${activeClass}" data-task-job-id="${job.id}" type="button">
-            <div class="doc-main">
-              <div class="doc-title">${job.id}</div>
-              <div class="doc-meta">${countText} · ${startedText}</div>
-              <div class="doc-meta"><span class="status-badge ${statusClass}">${statusText}</span></div>
-            </div>
-          </button>
+          <tr class="task-job-row${activeClass}" data-task-job-id="${escapeHtml(job.id)}">
+            <td class="task-job-id">${escapeHtml(job.id)}</td>
+            <td><span class="status-badge ${statusClass}">${escapeHtml(statusText)}</span></td>
+            <td>${escapeHtml(docCount)}</td>
+            <td>${escapeHtml(startedText)}</td>
+            <td>${escapeHtml(finishedText)}</td>
+          </tr>
         `;
       }).join('');
-      tasksListEl.querySelectorAll('[data-task-job-id]').forEach(btn => {
-        btn.addEventListener('click', () => loadBackfillJobStatus(btn.dataset.taskJobId));
+      tasksListEl.innerHTML = `
+        <table class="task-job-table">
+          <thead>
+            <tr>
+              <th>Job-ID</th>
+              <th>Status</th>
+              <th>Dokumente</th>
+              <th>Gestartet</th>
+              <th>Beendet</th>
+            </tr>
+          </thead>
+          <tbody>${rows}</tbody>
+        </table>
+      `;
+      tasksListEl.querySelectorAll('[data-task-job-id]').forEach(row => {
+        row.addEventListener('click', () => loadBackfillJobStatus(row.dataset.taskJobId));
       });
     }
 
@@ -3390,6 +3692,68 @@ HTML = """<!doctype html>
       tasksDetailLogEl.textContent = lines.join('\\n');
       tasksDetailLogEl.scrollTop = tasksDetailLogEl.scrollHeight;
       renderTaskJobList(window.__taskJobsCache || []);
+    }
+
+    function renderDocumentQualityDashboard(payload) {
+      const summary = payload && typeof payload.summary === 'object' ? payload.summary : {};
+      const rows = Array.isArray(payload && payload.documents) ? payload.documents : [];
+      tasksQualitySummaryEl.innerHTML = `
+        <div class="meta-row"><div class="meta-label">Dokumente geprueft</div><div>${formatValue(summary.documents)}</div></div>
+        <div class="meta-row"><div class="meta-label">Fehlender Titel</div><div>${formatValue(summary.missing_title)}</div></div>
+        <div class="meta-row"><div class="meta-label">Fehlende Korrespondenz</div><div>${formatValue(summary.missing_correspondent)}</div></div>
+        <div class="meta-row"><div class="meta-label">Fehlender Dokumenttyp</div><div>${formatValue(summary.missing_document_type)}</div></div>
+        <div class="meta-row"><div class="meta-label">Keine Fach-Tags</div><div>${formatValue(summary.missing_tags)}</div></div>
+        <div class="meta-row"><div class="meta-label">Schwaches OCR</div><div>${formatValue(summary.weak_ocr)}</div></div>
+        <div class="meta-row"><div class="meta-label">Review-Markiert</div><div>${formatValue(summary.review_flagged)}</div></div>
+        <div class="meta-row"><div class="meta-label">Dubletten-Gruppen</div><div>${formatValue(summary.duplicate_groups)}</div></div>
+      `;
+      if (!rows.length) {
+        tasksQualityTableEl.innerHTML = '<div class="doc-empty">Keine Dokumente fuer den Qualitaetscheck gefunden.</div>';
+        return;
+      }
+      tasksQualityTableEl.innerHTML = `
+        <table class="benchmark-table">
+          <thead>
+            <tr>
+              <th>ID</th>
+              <th>Titel</th>
+              <th>OCR</th>
+              <th>Fehlend</th>
+              <th>Review</th>
+              <th>Dubletten</th>
+            </tr>
+          </thead>
+          <tbody>
+            ${rows.map((row) => `
+              <tr>
+                <td>${escapeHtml(formatValue(row.id))}</td>
+                <td>${escapeHtml(formatValue(row.title || '(ohne Titel)'))}</td>
+                <td>${escapeHtml(`${formatValue(row.ocr_chars)} (${formatValue(row.ocr_quality)})`)}</td>
+                <td>${escapeHtml(Array.isArray(row.missing_fields) && row.missing_fields.length ? row.missing_fields.join(', ') : 'nein')}</td>
+                <td>${escapeHtml(row.review_tag ? 'ja' : 'nein')}</td>
+                <td>${escapeHtml((row.duplicate_group_size || 0) > 1 ? `${formatValue(row.duplicate_group_size)}x` : 'nein')}</td>
+              </tr>
+            `).join('')}
+          </tbody>
+        </table>
+      `;
+    }
+
+    async function loadDocumentQualityDashboard() {
+      tasksQualityStatusEl.textContent = 'Qualitaetscheck wird geladen...';
+      tasksQualityStatusEl.className = 'statusline';
+      try {
+        const res = await fetch('/api/paperless/quality/last?limit=30');
+        const data = await res.json();
+        if (!res.ok) throw new Error(data.error || 'Fehler');
+        renderDocumentQualityDashboard(data);
+        tasksQualityStatusEl.textContent = `Qualitaetscheck aktualisiert (${formatValue(data.summary && data.summary.documents)} Dokumente).`;
+      } catch (err) {
+        tasksQualityStatusEl.textContent = `Fehler beim Qualitaetscheck: ${err.message}`;
+        tasksQualityStatusEl.className = 'statusline warn';
+        tasksQualitySummaryEl.innerHTML = '<div class="doc-empty">Qualitaetsdaten nicht verfuegbar.</div>';
+        tasksQualityTableEl.innerHTML = '<div class="doc-empty">Qualitaetsdaten nicht verfuegbar.</div>';
+      }
     }
 
     async function cancelSelectedTaskJob() {
@@ -3830,6 +4194,281 @@ HTML = """<!doctype html>
       }
     }
 
+    function renderImageBackendList(backends) {
+      if (!Array.isArray(backends) || !backends.length) {
+        imageBackendListEl.innerHTML = '<div class="doc-empty">Keine Bilddienste erkannt.</div>';
+        return;
+      }
+      imageBackendListEl.innerHTML = backends.map((backend) => `
+        <div class="doc-row">
+          <div class="doc-main">
+            <div class="doc-title">${escapeHtml(String(backend.label || backend.id || 'unbekannt'))}</div>
+            <div class="doc-meta">${escapeHtml(formatValue(backend.container_name || '-'))} · ${escapeHtml(formatValue(backend.role || '-'))}</div>
+            <div class="doc-meta">${escapeHtml(formatValue(backend.notes || '-'))}</div>
+          </div>
+          <div class="doc-main">
+            <div class="doc-meta">Status: ${escapeHtml(formatValue(backend.container_status || 'unknown'))}</div>
+            <div class="doc-meta">Health: ${escapeHtml(formatValue(backend.container_health || 'none'))}</div>
+            <div class="doc-meta">${backend.api_reachable ? 'API erreichbar' : 'API nicht geprueft / nicht erreichbar'}</div>
+          </div>
+        </div>
+      `).join('');
+    }
+
+    function renderImagePresetTable(presets, activePresetId) {
+      if (!Array.isArray(presets) || !presets.length) {
+        imageBackendPresetsEl.innerHTML = '<div class="doc-empty">Keine Presets definiert.</div>';
+        return;
+      }
+      imageBackendPresetsEl.innerHTML = presets.map((preset) => `
+        <div class="meta-row">
+          <div class="meta-label">${escapeHtml(String(preset.label || preset.id || 'Preset'))}${String(preset.id || '') === String(activePresetId || '') ? ' · Standard' : ''}</div>
+          <div>${escapeHtml(String(preset.width || '?'))}x${escapeHtml(String(preset.height || '?'))} · bis ${escapeHtml(String(preset.max_expected_seconds || '?'))} s · ${escapeHtml(String(preset.description || '-'))}</div>
+        </div>
+      `).join('');
+    }
+
+    async function loadImageBackendStatus() {
+      imageBackendStatusEl.textContent = 'Bilddienst-Status wird geladen...';
+      imageBackendStatusEl.className = 'statusline';
+      try {
+        const res = await fetch('/api/image-backend');
+        const data = await res.json();
+        if (!res.ok) throw new Error(data.error || 'Fehler');
+        const active = data.active_backend && typeof data.active_backend === 'object' ? data.active_backend : null;
+        const hints = Array.isArray(data.hints) ? data.hints : [];
+        const metaRows = [
+          ['Aktiver Dienst', active ? (active.label || active.container_name || active.id || 'unbekannt') : 'keiner'],
+          ['Container', active ? (active.container_name || '-') : '-'],
+          ['Docker-Status', active ? (active.container_status || 'n/a') : 'n/a'],
+          ['Health', active ? (active.container_health || 'n/a') : 'n/a'],
+          ['API', active ? (active.api_reachable ? 'erreichbar' : 'nicht erreichbar') : 'n/a'],
+          ['Empfohlenes Preset', data.default_preset_label || 'Balanced'],
+          ['Zuletzt geprueft', data.checked_at || '-'],
+        ];
+        imageBackendMetaEl.innerHTML = metaRows.map(([label, value]) => `
+          <div class="meta-row"><div class="meta-label">${escapeHtml(String(label))}</div><div>${escapeHtml(formatValue(value))}</div></div>
+        `).join('') + (
+          hints.length
+            ? `<div class="alert-strip">${hints.map((hint) => `<div class="alert-chip ${escapeHtml(String(hint.level || 'info'))}">${escapeHtml(String(hint.message || 'Hinweis'))}</div>`).join('')}</div>`
+            : `<div class="meta-row"><div class="meta-label">Hinweise</div><div>Keine Auffaelligkeiten erkannt.</div></div>`
+        );
+        renderImagePresetTable(Array.isArray(data.presets) ? data.presets : [], data.default_preset);
+        renderImageBackendList(Array.isArray(data.backends) ? data.backends : []);
+        imageBackendStatusEl.textContent = active
+          ? `${formatValue(active.label || active.container_name)} bereit.`
+          : 'Kein aktiver Bilddienst erkannt.';
+      } catch (err) {
+        imageBackendStatusEl.textContent = `Fehler beim Laden des Bilddienst-Status: ${err.message}`;
+        imageBackendStatusEl.className = 'statusline warn';
+        imageBackendMetaEl.innerHTML = `<div class="doc-empty">Fehler beim Laden der Bilddienst-Daten: ${escapeHtml(err.message)}</div>`;
+        imageBackendListEl.innerHTML = '<div class="doc-empty">Bilddienstliste nicht verfuegbar.</div>';
+        imageBackendPresetsEl.innerHTML = '<div class="doc-empty">Preset-Tabelle nicht verfuegbar.</div>';
+      }
+    }
+
+    async function resetImageBackend() {
+      if (!window.confirm('Der aktuell aktive Bilddienst wird neu gestartet. Laufende Bildjobs werden dabei beendet. Fortfahren?')) {
+        imageBackendStatusEl.textContent = 'Reset abgebrochen.';
+        imageBackendStatusEl.className = 'statusline';
+        return;
+      }
+      imageBackendResetBtn.disabled = true;
+      imageBackendStatusEl.textContent = 'Bilddienst wird neu gestartet...';
+      imageBackendStatusEl.className = 'statusline';
+      try {
+        const res = await fetch('/api/image-backend/reset', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({})
+        });
+        const data = await res.json();
+        if (!res.ok) throw new Error(data.error || 'Fehler');
+        imageBackendStatusEl.textContent = `${formatValue(data.container_name || 'Bilddienst')} wurde neu gestartet.`;
+        imageBackendLogEl.textContent = [
+          `Container: ${formatValue(data.container_name || '-')}`,
+          `Returncode: ${formatValue(data.returncode)}`,
+          '',
+          String(data.output || 'Keine Ausgabe')
+        ].join('\\n');
+        imageBackendLogEl.scrollTop = imageBackendLogEl.scrollHeight;
+        await loadImageBackendStatus();
+      } catch (err) {
+        imageBackendStatusEl.textContent = `Fehler beim Reset des Bilddienstes: ${err.message}`;
+        imageBackendStatusEl.className = 'statusline warn';
+        imageBackendLogEl.textContent = `Fehler beim Reset: ${err.message}`;
+      } finally {
+        imageBackendResetBtn.disabled = false;
+      }
+    }
+
+    function renderOpenclawMcpList(names) {
+      if (!Array.isArray(names) || !names.length) {
+        openclawMcpListEl.innerHTML = '<div class="doc-empty">Keine MCP-Server erkannt.</div>';
+        return;
+      }
+      openclawMcpListEl.innerHTML = names.map((name) => `
+        <button class="doc-row" data-openclaw-mcp-name="${escapeHtml(String(name))}" type="button">
+          <div class="doc-main">
+            <div class="doc-title">${escapeHtml(String(name))}</div>
+            <div class="doc-meta">Click setzt den Namen fuer Show/Unset.</div>
+          </div>
+        </button>
+      `).join('');
+      openclawMcpListEl.querySelectorAll('[data-openclaw-mcp-name]').forEach((row) => {
+        row.addEventListener('click', () => {
+          const name = row.getAttribute('data-openclaw-mcp-name') || '';
+          openclawMcpNameEl.value = name;
+          openclawMcpSetNameEl.value = name;
+        });
+      });
+    }
+
+    async function loadOpenclawStatus() {
+      openclawStatusEl.textContent = 'OpenClaw-Status wird geladen...';
+      openclawStatusEl.className = 'statusline';
+      try {
+        const [statusRes, mcpRes] = await Promise.all([
+          fetch('/api/openclaw/status'),
+          fetch('/api/openclaw/mcp')
+        ]);
+        const statusData = await statusRes.json();
+        const mcpData = await mcpRes.json();
+        if (!statusRes.ok) throw new Error(statusData.error || 'OpenClaw Status Fehler');
+        if (!mcpRes.ok) throw new Error(mcpData.error || 'OpenClaw MCP Fehler');
+        const rows = [
+          ['Container', statusData.container_name || 'openclaw-gateway'],
+          ['Docker-Status', statusData.container_status || 'n/a'],
+          ['Health', statusData.container_health || 'n/a'],
+          ['OpenClaw Bin', statusData.openclaw_bin || 'openclaw'],
+          ['MCP Server', Array.isArray(mcpData.servers) ? String(mcpData.servers.length) : '0'],
+          ['Zuletzt geprueft', statusData.checked_at || '-'],
+        ];
+        openclawMetaEl.innerHTML = rows.map(([label, value]) => `
+          <div class="meta-row"><div class="meta-label">${escapeHtml(String(label))}</div><div>${escapeHtml(formatValue(value))}</div></div>
+        `).join('');
+        renderOpenclawMcpList(Array.isArray(mcpData.servers) ? mcpData.servers : []);
+        openclawStatusEl.textContent = `OpenClaw bereit. ${Array.isArray(mcpData.servers) ? mcpData.servers.length : 0} MCP-Server erkannt.`;
+      } catch (err) {
+        openclawStatusEl.textContent = `Fehler beim Laden von OpenClaw: ${err.message}`;
+        openclawStatusEl.className = 'statusline warn';
+        openclawMetaEl.innerHTML = `<div class="doc-empty">Fehler beim Laden der OpenClaw-Daten: ${escapeHtml(err.message)}</div>`;
+        openclawMcpListEl.innerHTML = '<div class="doc-empty">MCP-Liste nicht verfuegbar.</div>';
+      }
+    }
+
+    async function showOpenclawMcp() {
+      const name = openclawMcpNameEl.value.trim();
+      if (!name) {
+        openclawStatusEl.textContent = 'Bitte einen MCP-Servernamen eintragen.';
+        openclawStatusEl.className = 'statusline warn';
+        return;
+      }
+      openclawMcpShowBtn.disabled = true;
+      openclawStatusEl.textContent = `Lade MCP-Server ${name}...`;
+      openclawStatusEl.className = 'statusline';
+      try {
+        const res = await fetch(`/api/openclaw/mcp/${encodeURIComponent(name)}`);
+        const data = await res.json();
+        if (!res.ok) throw new Error(data.error || 'Fehler');
+        openclawMcpLogEl.textContent = data.raw || 'Keine Ausgabe';
+        openclawMcpLogEl.scrollTop = openclawMcpLogEl.scrollHeight;
+        openclawStatusEl.textContent = `MCP-Server ${name} geladen.`;
+      } catch (err) {
+        openclawStatusEl.textContent = `Fehler beim Anzeigen von ${name}: ${err.message}`;
+        openclawStatusEl.className = 'statusline warn';
+        openclawMcpLogEl.textContent = `Fehler: ${err.message}`;
+      } finally {
+        openclawMcpShowBtn.disabled = false;
+      }
+    }
+
+    async function setOpenclawMcp() {
+      const name = openclawMcpSetNameEl.value.trim();
+      const command = openclawMcpCommandEl.value.trim();
+      const args = openclawMcpArgsEl.value
+        .split('\\n')
+        .map((line) => line.trim())
+        .filter(Boolean);
+      let env = {};
+      if (openclawMcpEnvEl.value.trim()) {
+        try {
+          env = JSON.parse(openclawMcpEnvEl.value.trim());
+        } catch (err) {
+          openclawStatusEl.textContent = `ENV JSON ungueltig: ${err.message}`;
+          openclawStatusEl.className = 'statusline warn';
+          return;
+        }
+      }
+      if (!name || !command) {
+        openclawStatusEl.textContent = 'Bitte Name und Command fuer mcp set eintragen.';
+        openclawStatusEl.className = 'statusline warn';
+        return;
+      }
+      openclawMcpSetBtn.disabled = true;
+      openclawStatusEl.textContent = `Setze MCP-Server ${name}...`;
+      openclawStatusEl.className = 'statusline';
+      try {
+        const res = await fetch('/api/openclaw/mcp/set', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ name, command, args, env })
+        });
+        const data = await res.json();
+        if (!res.ok) throw new Error(data.error || 'Fehler');
+        openclawMcpNameEl.value = name;
+        openclawMcpLogEl.textContent = [
+          data.message || 'MCP gespeichert.',
+          '',
+          data.raw || '',
+          '',
+          data.show || '',
+        ].filter(Boolean).join('\\n');
+        openclawMcpLogEl.scrollTop = openclawMcpLogEl.scrollHeight;
+        openclawStatusEl.textContent = `MCP-Server ${name} gespeichert.`;
+        await loadOpenclawStatus();
+      } catch (err) {
+        openclawStatusEl.textContent = `Fehler beim Speichern von ${name}: ${err.message}`;
+        openclawStatusEl.className = 'statusline warn';
+        openclawMcpLogEl.textContent = `Fehler: ${err.message}`;
+      } finally {
+        openclawMcpSetBtn.disabled = false;
+      }
+    }
+
+    async function unsetOpenclawMcp() {
+      const name = openclawMcpNameEl.value.trim();
+      if (!name) {
+        openclawStatusEl.textContent = 'Bitte einen MCP-Servernamen fuer unset eintragen.';
+        openclawStatusEl.className = 'statusline warn';
+        return;
+      }
+      if (!window.confirm(`MCP-Server ${name} wirklich entfernen?`)) {
+        return;
+      }
+      openclawMcpUnsetBtn.disabled = true;
+      openclawStatusEl.textContent = `Entferne MCP-Server ${name}...`;
+      openclawStatusEl.className = 'statusline';
+      try {
+        const res = await fetch('/api/openclaw/mcp/unset', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ name })
+        });
+        const data = await res.json();
+        if (!res.ok) throw new Error(data.error || 'Fehler');
+        openclawMcpLogEl.textContent = [data.message || 'MCP entfernt.', '', data.raw || ''].filter(Boolean).join('\\n');
+        openclawStatusEl.textContent = `MCP-Server ${name} entfernt.`;
+        await loadOpenclawStatus();
+      } catch (err) {
+        openclawStatusEl.textContent = `Fehler beim Entfernen von ${name}: ${err.message}`;
+        openclawStatusEl.className = 'statusline warn';
+        openclawMcpLogEl.textContent = `Fehler: ${err.message}`;
+      } finally {
+        openclawMcpUnsetBtn.disabled = false;
+      }
+    }
+
     async function loadBackfillJobStatus(jobId) {
       const cleanJobId = jobId || activeBackfillJobId;
       if (!cleanJobId) {
@@ -4009,9 +4648,19 @@ HTML = """<!doctype html>
     tasksRefreshBtn.addEventListener('click', async () => {
       await loadTaskJobs();
       await loadSystemMetrics();
+      await loadDocumentQualityDashboard();
     });
+    if (tasksQualityRefreshBtn) {
+      tasksQualityRefreshBtn.addEventListener('click', loadDocumentQualityDashboard);
+    }
     ollamaRunnerRefreshBtn.addEventListener('click', loadOllamaRunnerStatus);
     ollamaRunnerResetBtn.addEventListener('click', resetOllamaRunner);
+    imageBackendRefreshBtn.addEventListener('click', loadImageBackendStatus);
+    imageBackendResetBtn.addEventListener('click', resetImageBackend);
+    openclawRefreshBtn.addEventListener('click', loadOpenclawStatus);
+    openclawMcpShowBtn.addEventListener('click', showOpenclawMcp);
+    openclawMcpSetBtn.addEventListener('click', setOpenclawMcp);
+    openclawMcpUnsetBtn.addEventListener('click', unsetOpenclawMcp);
     tasksShowLatestBtn.addEventListener('click', loadLatestBackfillJobStatus);
     tasksRefreshSelectedBtn.addEventListener('click', () => loadBackfillJobStatus(activeTaskJobId || activeBackfillJobId));
     tasksCancelSelectedBtn.addEventListener('click', cancelSelectedTaskJob);
@@ -4055,9 +4704,15 @@ HTML = """<!doctype html>
     loadLatestBackfillJobStatus();
     loadTaskJobs();
     loadSystemMetrics();
+    loadDocumentQualityDashboard();
     loadOllamaRunnerStatus();
+    loadImageBackendStatus();
+    loadOpenclawStatus();
     window.setInterval(loadSystemMetrics, 2000);
+    window.setInterval(loadDocumentQualityDashboard, 15000);
     window.setInterval(loadOllamaRunnerStatus, 5000);
+    window.setInterval(loadImageBackendStatus, 5000);
+    window.setInterval(loadOpenclawStatus, 10000);
     loadModelConfig();
     loadProviderConfigUi();
   </script>
@@ -4653,6 +5308,188 @@ def fetch_paperless_document(document_id: int) -> tuple[int, dict]:
         "correspondent_name": correspondent_name,
     }
     return 200, {"document": document}
+
+
+def _normalize_quality_key(value: str) -> str:
+    text = str(value or "").strip().casefold()
+    text = re.sub(r"\s+", " ", text)
+    return text
+
+
+def _quality_missing_fields(title: str, correspondent_name: str, document_type_name: str, has_domain_tags: bool) -> list[str]:
+    missing: list[str] = []
+    if len(title.strip()) < 5:
+        missing.append("Titel")
+    if not correspondent_name.strip():
+        missing.append("Korrespondenz")
+    if not document_type_name.strip():
+        missing.append("Dokumenttyp")
+    if not has_domain_tags:
+        missing.append("Tags")
+    return missing
+
+
+def _quality_ocr_label(char_count: int) -> str:
+    if char_count < 400:
+        return "kritisch"
+    if char_count < 1200:
+        return "schwach"
+    if char_count < 2500:
+        return "ok"
+    return "gut"
+
+
+def read_recent_document_quality(limit: int = 30) -> tuple[int, dict]:
+    safe_limit = max(1, min(int(limit or 30), 100))
+    paperless_env = load_paperless_env()
+    review_tag_name = str(paperless_env.get("PAPERLESS_AI_REVIEW_TAG_NAME", "KI Nachpruefen") or "KI Nachpruefen").strip()
+    preview_config = load_preview_config()
+    vision_tag_name = str(preview_config.get("vision_tag_name", "KI Vision") or "KI Vision").strip()
+    listing = _paperless_api_request(f"/api/documents/?page_size={safe_limit}&ordering=-id", timeout=180)
+    if not isinstance(listing, dict):
+        return 500, {"error": "unexpected documents payload"}
+    raw_documents = listing.get("results")
+    if not isinstance(raw_documents, list):
+        raw_documents = []
+    tags_payload = _paperless_api_request("/api/tags/?page_size=500", timeout=120)
+    tags_results = tags_payload.get("results") if isinstance(tags_payload, dict) else []
+    tag_id_to_name: dict[int, str] = {}
+    if isinstance(tags_results, list):
+        for item in tags_results:
+            if not isinstance(item, dict):
+                continue
+            try:
+                tag_id = int(item.get("id"))
+            except Exception:
+                continue
+            tag_name = str(item.get("name") or "").strip()
+            if tag_name:
+                tag_id_to_name[tag_id] = tag_name
+    review_tag_id = None
+    vision_tag_id = None
+    for tag_id, tag_name in tag_id_to_name.items():
+        normalized = tag_name.casefold()
+        if normalized == review_tag_name.casefold():
+            review_tag_id = tag_id
+        if normalized == vision_tag_name.casefold():
+            vision_tag_id = tag_id
+    rows: list[dict[str, object]] = []
+    duplicate_index: dict[str, list[int]] = {}
+    summary = {
+        "documents": 0,
+        "missing_title": 0,
+        "missing_correspondent": 0,
+        "missing_document_type": 0,
+        "missing_tags": 0,
+        "weak_ocr": 0,
+        "review_flagged": 0,
+        "duplicate_groups": 0,
+        "duplicate_documents": 0,
+    }
+    for raw_item in raw_documents:
+        if not isinstance(raw_item, dict):
+            continue
+        doc_id = int(raw_item.get("id") or 0)
+        if doc_id <= 0:
+            continue
+        details = raw_item
+        if "content" not in details:
+            details = _paperless_api_request(f"/api/documents/{doc_id}/", timeout=180)
+            if not isinstance(details, dict):
+                details = raw_item
+        title = str(details.get("title") or "").strip()
+        created_date = str(details.get("created_date") or "").strip()
+        original_file_name = str(details.get("original_file_name") or "").strip()
+        content = str(details.get("content") or "")
+        correspondent = details.get("correspondent")
+        document_type = details.get("document_type")
+        correspondent_name = ""
+        if isinstance(correspondent, dict):
+            correspondent_name = str(correspondent.get("name") or "").strip()
+        elif correspondent not in (None, ""):
+            correspondent_name = str(correspondent).strip()
+        document_type_name = ""
+        if isinstance(document_type, dict):
+            document_type_name = str(document_type.get("name") or "").strip()
+        elif document_type not in (None, ""):
+            document_type_name = str(document_type).strip()
+        tag_ids: list[int] = []
+        raw_tags = details.get("tags")
+        if isinstance(raw_tags, list):
+            for tag in raw_tags:
+                if isinstance(tag, dict):
+                    try:
+                        tag_ids.append(int(tag.get("id")))
+                    except Exception:
+                        continue
+                else:
+                    try:
+                        tag_ids.append(int(tag))
+                    except Exception:
+                        continue
+        tag_names = [tag_id_to_name.get(tag_id, str(tag_id)) for tag_id in tag_ids]
+        domain_tag_names = [
+            name
+            for name in tag_names
+            if name.casefold() not in (review_tag_name.casefold(), vision_tag_name.casefold())
+        ]
+        missing_fields = _quality_missing_fields(title, correspondent_name, document_type_name, bool(domain_tag_names))
+        ocr_chars = len(content.strip())
+        ocr_quality = _quality_ocr_label(ocr_chars)
+        review_flag = bool(review_tag_id and review_tag_id in tag_ids)
+        vision_flag = bool(vision_tag_id and vision_tag_id in tag_ids)
+        if "Titel" in missing_fields:
+            summary["missing_title"] += 1
+        if "Korrespondenz" in missing_fields:
+            summary["missing_correspondent"] += 1
+        if "Dokumenttyp" in missing_fields:
+            summary["missing_document_type"] += 1
+        if "Tags" in missing_fields:
+            summary["missing_tags"] += 1
+        if ocr_quality in ("kritisch", "schwach"):
+            summary["weak_ocr"] += 1
+        if review_flag:
+            summary["review_flagged"] += 1
+        duplicate_key = "|".join(
+            [
+                _normalize_quality_key(title),
+                _normalize_quality_key(created_date),
+                _normalize_quality_key(correspondent_name),
+                _normalize_quality_key(original_file_name),
+            ]
+        )
+        duplicate_index.setdefault(duplicate_key, []).append(doc_id)
+        summary["documents"] += 1
+        rows.append(
+            {
+                "id": doc_id,
+                "title": title,
+                "created_date": created_date,
+                "original_file_name": original_file_name,
+                "ocr_chars": ocr_chars,
+                "ocr_quality": ocr_quality,
+                "correspondent": correspondent_name,
+                "document_type": document_type_name,
+                "missing_fields": missing_fields,
+                "review_tag": review_flag,
+                "vision_tag": vision_flag,
+                "duplicate_group_size": 1,
+            }
+        )
+    duplicates = {
+        key: ids
+        for key, ids in duplicate_index.items()
+        if len(ids) > 1 and key.replace("|", "").strip()
+    }
+    summary["duplicate_groups"] = len(duplicates)
+    summary["duplicate_documents"] = sum(len(ids) for ids in duplicates.values())
+    dup_size_by_id: dict[int, int] = {}
+    for ids in duplicates.values():
+        for doc_id in ids:
+            dup_size_by_id[doc_id] = len(ids)
+    for row in rows:
+        row["duplicate_group_size"] = dup_size_by_id.get(int(row.get("id") or 0), 1)
+    return 200, {"summary": summary, "documents": rows}
 
 
 def fetch_paperless_document_binary(document_id: int) -> tuple[bytes, str]:
@@ -5818,11 +6655,14 @@ def run_paperless_backfill(payload: dict) -> tuple[int, dict]:
         "PAPERLESS_AI_HTTP_TIMEOUT_SECONDS",
         "OPENAI_API_KEY",
         "PAPERLESS_AI_OPENAI_MODEL",
+        "PAPERLESS_AI_VISION_AUTOPILOT_ENABLED",
+        "PAPERLESS_AI_WEB_URL",
     ):
         if key in paperless_env:
             child_env[key] = paperless_env[key]
 
-    cmd = ["/usr/bin/python3", PAPERLESS_BACKFILL]
+    python_bin = sys.executable or "/usr/local/bin/python"
+    cmd = [python_bin, PAPERLESS_BACKFILL]
     limit = int(payload.get("limit") or 0)
     from_id = int(payload.get("from_id") or 0)
     query = str(payload.get("query") or "").strip()
@@ -5932,6 +6772,84 @@ def _save_backfill_state() -> None:
     path.write_text(json.dumps(payload, ensure_ascii=True, indent=2) + "\n", encoding="utf-8")
 
 
+def _parse_job_timestamp(value: object) -> int:
+    text = str(value or "").strip()
+    if not text:
+        return 0
+    for fmt in ("%Y-%m-%d %H:%M:%S", "%Y-%m-%dT%H:%M:%S"):
+        try:
+            return int(time.mktime(time.strptime(text, fmt)))
+        except Exception:
+            continue
+    return 0
+
+
+def _job_sort_tuple(job: dict) -> tuple[int, str]:
+    ts = _parse_job_timestamp(job.get("finished_at")) or _parse_job_timestamp(job.get("started_at"))
+    return ts, str(job.get("id") or "")
+
+
+def _prune_backfill_jobs_locked() -> bool:
+    global BACKFILL_LATEST_JOB_ID
+    now = int(time.time())
+    changed = False
+    removable: set[str] = set()
+    if BACKFILL_JOB_RETENTION_HOURS > 0:
+        cutoff = now - (BACKFILL_JOB_RETENTION_HOURS * 3600)
+        for job_id, job in BACKFILL_JOBS.items():
+            if not isinstance(job, dict):
+                removable.add(job_id)
+                continue
+            status = str(job.get("status") or "")
+            if status in {"running", "starting"} and _process_alive(job.get("pid")):
+                continue
+            ts = _job_sort_tuple(job)[0]
+            if ts and ts < cutoff:
+                removable.add(job_id)
+
+    completed: list[tuple[tuple[int, str], str]] = []
+    for job_id, job in BACKFILL_JOBS.items():
+        if not isinstance(job, dict):
+            removable.add(job_id)
+            continue
+        status = str(job.get("status") or "")
+        if status in {"running", "starting"} and _process_alive(job.get("pid")):
+            continue
+        completed.append((_job_sort_tuple(job), job_id))
+    completed.sort(reverse=True)
+    overflow = len(completed) - BACKFILL_JOB_MAX_ENTRIES
+    if overflow > 0:
+        for _, job_id in completed[-overflow:]:
+            removable.add(job_id)
+
+    for job_id in removable:
+        job = BACKFILL_JOBS.pop(job_id, None)
+        if not isinstance(job, dict):
+            changed = True
+            continue
+        log_path = str(job.get("log_path") or "").strip()
+        if log_path:
+            try:
+                Path(log_path).unlink(missing_ok=True)
+            except Exception:
+                pass
+        changed = True
+
+    if BACKFILL_LATEST_JOB_ID not in BACKFILL_JOBS:
+        latest = None
+        ordered = sorted(
+            (value for value in BACKFILL_JOBS.values() if isinstance(value, dict)),
+            key=_job_sort_tuple,
+            reverse=True,
+        )
+        if ordered:
+            latest = str(ordered[0].get("id") or "")
+        if (BACKFILL_LATEST_JOB_ID or "") != (latest or ""):
+            BACKFILL_LATEST_JOB_ID = latest
+            changed = True
+    return changed
+
+
 def _load_backfill_state() -> None:
     global BACKFILL_LATEST_JOB_ID
     path = Path(BACKFILL_STATE_PATH)
@@ -5950,6 +6868,8 @@ def _load_backfill_state() -> None:
                 BACKFILL_JOBS[key] = value
     if isinstance(latest_job_id, str):
         BACKFILL_LATEST_JOB_ID = latest_job_id
+    if _prune_backfill_jobs_locked():
+        _save_backfill_state()
 
 
 def _discover_latest_backfill_job_from_logs() -> dict | None:
@@ -5993,6 +6913,7 @@ def store_backfill_job(job_id: str, payload: dict) -> None:
     with BACKFILL_JOBS_LOCK:
         BACKFILL_JOBS[job_id] = payload
         BACKFILL_LATEST_JOB_ID = job_id
+        _prune_backfill_jobs_locked()
         _save_backfill_state()
 
 
@@ -6031,11 +6952,10 @@ def list_backfill_jobs() -> list[dict]:
         discovered = _discover_latest_backfill_job_from_logs()
         if discovered and discovered["id"] not in BACKFILL_JOBS:
             BACKFILL_JOBS[discovered["id"]] = discovered
+        if _prune_backfill_jobs_locked():
             _save_backfill_state()
         jobs = [dict(value) for value in BACKFILL_JOBS.values() if isinstance(value, dict)]
-    def _sort_key(job: dict) -> tuple[str, str]:
-        return (str(job.get("started_at") or ""), str(job.get("id") or ""))
-    jobs.sort(key=_sort_key, reverse=True)
+    jobs.sort(key=_job_sort_tuple, reverse=True)
     return jobs
 
 
@@ -6244,6 +7164,40 @@ def _docker_inspect_ollama_container() -> dict[str, object]:
     }
 
 
+def _docker_inspect_container(container_name: str) -> dict[str, object]:
+    status, payload = _docker_api_request("GET", f"/containers/{container_name}/json")
+    if status != 200 or not isinstance(payload, dict):
+        return {
+            "container_name": container_name,
+            "container_status": "missing",
+            "container_health": "unknown",
+            "inspect_error": str(payload.get("error") if isinstance(payload, dict) else payload or "docker inspect failed"),
+        }
+    state = payload.get("State") if isinstance(payload.get("State"), dict) else {}
+    health = state.get("Health") if isinstance(state.get("Health"), dict) else {}
+    return {
+        "container_name": container_name,
+        "container_status": str(state.get("Status") or "unknown"),
+        "container_health": str(health.get("Status") or "none"),
+    }
+
+
+def _http_json_request(url: str, timeout: float = 5.0) -> tuple[bool, dict | list | str]:
+    try:
+        request = urllib.request.Request(url)
+        with urllib.request.urlopen(request, timeout=timeout) as response:
+            raw = response.read()
+        text = raw.decode("utf-8", errors="replace") if raw else ""
+        if not text:
+            return True, {}
+        try:
+            return True, json.loads(text)
+        except json.JSONDecodeError:
+            return True, text
+    except Exception as exc:
+        return False, str(exc)
+
+
 def read_ollama_runner_status() -> tuple[int, dict]:
     runtime_models = _read_ollama_runtime_models()
     tags_status, tags_payload = ollama_request("/api/tags")
@@ -6297,6 +7251,292 @@ def reset_ollama_runner() -> tuple[int, dict]:
         "returncode": 0,
         "output": output,
         "status": status_payload,
+    }
+
+
+def read_image_backend_status() -> tuple[int, dict]:
+    backends: list[dict[str, object]] = []
+    hints: list[dict[str, str]] = []
+    active_backend: dict[str, object] | None = None
+    for backend in IMAGE_BACKEND_CONTAINERS:
+        entry = dict(backend)
+        inspect = _docker_inspect_container(str(entry["container_name"]))
+        entry.update(inspect)
+        api_reachable = False
+        api_hint = ""
+        if entry["id"] == "automatic1111" and entry.get("container_status") == "running":
+            api_reachable, response = _http_json_request("http://127.0.0.1:7860/sdapi/v1/sd-models", timeout=6)
+            api_hint = "" if api_reachable else str(response)
+        elif entry["id"] == "comfyui" and entry.get("container_status") == "running":
+            api_reachable, response = _http_json_request("http://127.0.0.1:8188/system_stats", timeout=6)
+            api_hint = "" if api_reachable else str(response)
+        elif entry["id"] == "openvino" and entry.get("container_status") == "running":
+            api_reachable, response = _http_json_request("http://127.0.0.1:8000/v3/models", timeout=6)
+            api_hint = "" if api_reachable else str(response)
+        entry["api_reachable"] = api_reachable
+        if api_hint:
+            entry["api_hint"] = api_hint
+        backends.append(entry)
+
+    for entry in backends:
+        if entry.get("id") == "automatic1111" and entry.get("container_status") == "running":
+            active_backend = entry
+            break
+    if active_backend is None:
+        for entry in backends:
+            if entry.get("container_status") == "running":
+                active_backend = entry
+                break
+
+    if active_backend is None:
+        hints.append({"level": "warn", "message": "Kein laufender Bilddienst erkannt."})
+    else:
+        if active_backend.get("container_health") not in {"healthy", "none"}:
+            hints.append({"level": "warn", "message": f"Health von {active_backend.get('label')}: {active_backend.get('container_health') or 'unbekannt'}."})
+        if not active_backend.get("api_reachable") and active_backend.get("id") != "automatic1111":
+            hints.append({"level": "info", "message": f"{active_backend.get('label')} laeuft, API-Antwort ist aber nicht bestaetigt."})
+        if active_backend.get("id") == "automatic1111":
+            hints.append({"level": "info", "message": "Balanced 1536x864 ist der empfohlene AMD-Alltagsmodus."})
+            hints.append({"level": "info", "message": "Max 1920x1080 nur fuer leichtere Prompts oder nach Reset nutzen."})
+    for entry in backends:
+        if entry.get("inspect_error"):
+            hints.append({"level": "warn", "message": f"{entry.get('label')}: {entry.get('inspect_error')}"})
+
+    default_preset = next((preset for preset in IMAGE_PRESETS if preset["id"] == IMAGE_PRESET_DEFAULT), IMAGE_PRESETS[1])
+    return 200, {
+        "active_backend": active_backend,
+        "backends": backends,
+        "presets": IMAGE_PRESETS,
+        "default_preset": default_preset["id"],
+        "default_preset_label": default_preset["label"],
+        "hints": hints,
+        "checked_at": time.strftime("%Y-%m-%d %H:%M:%S"),
+    }
+
+
+def reset_image_backend() -> tuple[int, dict]:
+    _, status_payload = read_image_backend_status()
+    active_backend = status_payload.get("active_backend") if isinstance(status_payload, dict) else None
+    if not isinstance(active_backend, dict) or not active_backend.get("container_name"):
+        return 404, {"error": "Kein aktiver Bilddienst gefunden"}
+    container_name = str(active_backend["container_name"])
+    status, payload = _docker_api_request("POST", f"/containers/{container_name}/restart?t=10", timeout=180)
+    if status not in {200, 204}:
+        return 500, {
+            "error": str(payload.get("error") if isinstance(payload, dict) else payload or "docker restart failed"),
+            "container_name": container_name,
+            "returncode": status,
+        }
+    time.sleep(2)
+    status_code, refreshed_payload = read_image_backend_status()
+    return status_code, {
+        "container_name": container_name,
+        "returncode": 0,
+        "output": "",
+        "status": refreshed_payload,
+    }
+
+
+def _docker_exec_in_container(container_name: str, cmd: list[str], timeout: float = 45.0) -> tuple[int, dict]:
+    create_status, create_payload = _docker_api_request(
+        "POST",
+        f"/containers/{container_name}/exec",
+        {"AttachStdout": True, "AttachStderr": True, "Tty": True, "Cmd": cmd},
+        timeout=timeout,
+    )
+    if create_status not in {200, 201} or not isinstance(create_payload, dict) or not create_payload.get("Id"):
+        return 500, {
+            "error": str(create_payload.get("error") if isinstance(create_payload, dict) else create_payload or "docker exec create failed"),
+            "container_name": container_name,
+            "returncode": create_status,
+        }
+    exec_id = str(create_payload.get("Id"))
+    start_status, start_payload = _docker_api_request(
+        "POST",
+        f"/exec/{exec_id}/start",
+        {"Detach": False, "Tty": True},
+        timeout=timeout,
+    )
+    inspect_status, inspect_payload = _docker_api_request("GET", f"/exec/{exec_id}/json", timeout=timeout)
+    exit_code = None
+    running = False
+    if inspect_status == 200 and isinstance(inspect_payload, dict):
+        exit_code = inspect_payload.get("ExitCode")
+        running = bool(inspect_payload.get("Running"))
+    output = ""
+    if isinstance(start_payload, dict):
+        output = str(start_payload.get("raw") or "")
+    elif isinstance(start_payload, str):
+        output = start_payload
+    if start_status != 200:
+        return 500, {
+            "error": f"docker exec start failed ({start_status})",
+            "container_name": container_name,
+            "returncode": start_status,
+            "output": output,
+        }
+    return 200, {
+        "container_name": container_name,
+        "returncode": int(exit_code) if isinstance(exit_code, int) else (0 if not running else None),
+        "running": running,
+        "output": output,
+        "cmd": cmd,
+    }
+
+
+def _mask_sensitive_text(text: str) -> str:
+    masked = text
+    masked = re.sub(
+        r'("?(?:token|password|secret|api[_-]?key|personal[_-]?access[_-]?token)"?\s*[:=]\s*"?)([^",\s]+)("?)',
+        r"\1***\3",
+        masked,
+        flags=re.IGNORECASE,
+    )
+    masked = re.sub(
+        r"((?:token|password|secret|api[_-]?key|personal[_-]?access[_-]?token)\s*=\s*)([^\s]+)",
+        r"\1***",
+        masked,
+        flags=re.IGNORECASE,
+    )
+    return masked
+
+
+def _openclaw_exec(args: list[str], timeout: float = 45.0) -> tuple[int, dict]:
+    cmd = [OPENCLAW_BIN, *args]
+    status, payload = _docker_exec_in_container(OPENCLAW_CONTAINER_NAME, cmd, timeout=timeout)
+    if status != 200:
+        return status, payload
+    output = _mask_sensitive_text(str(payload.get("output") or ""))
+    returncode = payload.get("returncode")
+    if returncode not in {0, None}:
+        return 500, {
+            "error": f"openclaw exited with code {returncode}",
+            "returncode": returncode,
+            "output": output,
+            "cmd": cmd,
+            "container_name": OPENCLAW_CONTAINER_NAME,
+        }
+    return 200, {
+        "returncode": 0 if returncode is None else returncode,
+        "output": output,
+        "cmd": cmd,
+        "container_name": OPENCLAW_CONTAINER_NAME,
+    }
+
+
+def _validate_mcp_name(name: str) -> bool:
+    return bool(re.fullmatch(r"[A-Za-z0-9._-]{1,64}", name or ""))
+
+
+def _parse_mcp_names(raw_output: str) -> list[str]:
+    names: list[str] = []
+    for line in raw_output.splitlines():
+        row = line.strip()
+        if not row:
+            continue
+        if row.lower().startswith(("name ", "configured ", "server ", "id ")):
+            continue
+        if set(row) <= {"-", "="}:
+            continue
+        match = re.match(r"^([A-Za-z0-9._-]+)\b", row)
+        if not match:
+            continue
+        candidate = match.group(1)
+        if candidate.lower() in {"name", "enabled", "status"}:
+            continue
+        if candidate not in names:
+            names.append(candidate)
+    return names
+
+
+def read_openclaw_status() -> tuple[int, dict]:
+    inspect = _docker_inspect_container(OPENCLAW_CONTAINER_NAME)
+    list_status, list_payload = read_openclaw_mcp_list()
+    mcp_names: list[str] = []
+    mcp_output = ""
+    if list_status == 200 and isinstance(list_payload, dict):
+        mcp_names = list_payload.get("servers", []) if isinstance(list_payload.get("servers"), list) else []
+        mcp_output = str(list_payload.get("raw") or "")
+    return 200, {
+        **inspect,
+        "openclaw_bin": OPENCLAW_BIN,
+        "mcp_servers": mcp_names,
+        "mcp_count": len(mcp_names),
+        "mcp_raw": mcp_output,
+        "checked_at": time.strftime("%Y-%m-%d %H:%M:%S"),
+    }
+
+
+def read_openclaw_mcp_list() -> tuple[int, dict]:
+    status, payload = _openclaw_exec(["mcp", "list"], timeout=40)
+    if status != 200:
+        return status, payload
+    raw = str(payload.get("output") or "")
+    return 200, {
+        "servers": _parse_mcp_names(raw),
+        "raw": raw,
+        "container_name": OPENCLAW_CONTAINER_NAME,
+    }
+
+
+def read_openclaw_mcp_server(name: str) -> tuple[int, dict]:
+    if not _validate_mcp_name(name):
+        return 400, {"error": "invalid mcp server name"}
+    status, payload = _openclaw_exec(["mcp", "show", name], timeout=40)
+    if status != 200:
+        return status, payload
+    return 200, {
+        "name": name,
+        "raw": str(payload.get("output") or ""),
+        "container_name": OPENCLAW_CONTAINER_NAME,
+    }
+
+
+def set_openclaw_mcp_server(payload: dict) -> tuple[int, dict]:
+    name = str(payload.get("name") or "").strip()
+    command = str(payload.get("command") or "").strip()
+    args = payload.get("args")
+    env_map = payload.get("env")
+    if not _validate_mcp_name(name):
+        return 400, {"error": "invalid mcp server name"}
+    if not command:
+        return 400, {"error": "command is required"}
+    cmd = ["mcp", "set", name, "--command", command]
+    if isinstance(args, list):
+        for arg in args:
+            token = str(arg).strip()
+            if not token:
+                continue
+            cmd.extend(["--arg", token])
+    if isinstance(env_map, dict):
+        for key, value in env_map.items():
+            env_key = str(key).strip()
+            if not re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]{0,63}", env_key):
+                return 400, {"error": f"invalid env key: {env_key}"}
+            cmd.extend(["--env", f"{env_key}={str(value)}"])
+    status, result = _openclaw_exec(cmd, timeout=60)
+    if status != 200:
+        return status, result
+    _, show_payload = read_openclaw_mcp_server(name)
+    return 200, {
+        "message": f"MCP server {name} updated",
+        "name": name,
+        "raw": str(result.get("output") or ""),
+        "show": show_payload.get("raw") if isinstance(show_payload, dict) else "",
+    }
+
+
+def unset_openclaw_mcp_server(payload: dict) -> tuple[int, dict]:
+    name = str(payload.get("name") or "").strip()
+    if not _validate_mcp_name(name):
+        return 400, {"error": "invalid mcp server name"}
+    status, result = _openclaw_exec(["mcp", "unset", name], timeout=45)
+    if status != 200:
+        return status, result
+    return 200, {
+        "message": f"MCP server {name} removed",
+        "name": name,
+        "raw": str(result.get("output") or ""),
     }
 
 
@@ -6987,7 +8227,15 @@ def build_backfill_command_and_env(payload: dict) -> tuple[list[str], dict[str, 
     ):
         if key in paperless_env:
             child_env[key] = paperless_env[key]
-    cmd = ["/usr/bin/python3", PAPERLESS_BACKFILL]
+    python_bin = os.getenv("PAPERLESS_PYTHON_BIN", sys.executable or "/usr/local/bin/python3")
+    cmd = [python_bin, PAPERLESS_BACKFILL]
+    hook_path = (
+        os.getenv("PAPERLESS_POST_CONSUME_SCRIPT")
+        or os.getenv("PAPERLESS_AI_HOOK_PATH")
+        or "/opt/paperless/ai_enrich.py"
+    )
+    if hook_path and Path(hook_path).is_file():
+        cmd.extend(["--hook", hook_path])
     limit = int(payload.get("limit") or 0)
     from_id = int(payload.get("from_id") or 0)
     query = str(payload.get("query") or "").strip()
@@ -7122,6 +8370,35 @@ class Handler(BaseHTTPRequestHandler):
                 status, payload = 500, {"error": str(exc)}
             self._send(status, json.dumps(payload).encode("utf-8"), "application/json")
             return
+        if self.path == "/api/image-backend":
+            try:
+                status, payload = read_image_backend_status()
+            except Exception as exc:
+                status, payload = 500, {"error": str(exc)}
+            self._send(status, json.dumps(payload).encode("utf-8"), "application/json")
+            return
+        if self.path == "/api/openclaw/status":
+            try:
+                status, payload = read_openclaw_status()
+            except Exception as exc:
+                status, payload = 500, {"error": str(exc)}
+            self._send(status, json.dumps(payload).encode("utf-8"), "application/json")
+            return
+        if self.path == "/api/openclaw/mcp":
+            try:
+                status, payload = read_openclaw_mcp_list()
+            except Exception as exc:
+                status, payload = 500, {"error": str(exc)}
+            self._send(status, json.dumps(payload).encode("utf-8"), "application/json")
+            return
+        if self.path.startswith("/api/openclaw/mcp/"):
+            server_name = urllib.parse.unquote(self.path.rsplit("/", 1)[-1])
+            try:
+                status, payload = read_openclaw_mcp_server(server_name)
+            except Exception as exc:
+                status, payload = 500, {"error": str(exc)}
+            self._send(status, json.dumps(payload).encode("utf-8"), "application/json")
+            return
         if self.path.startswith("/api/paperless/document/"):
             try:
                 document_id = int(self.path.rsplit("/", 1)[-1])
@@ -7132,6 +8409,19 @@ class Handler(BaseHTTPRequestHandler):
             return
         if self.path.startswith("/api/paperless/document/") and self.path.endswith("/preview"):
             self._send(404, b"Not found", "text/plain; charset=utf-8")
+            return
+        if self.path.startswith("/api/paperless/quality/last"):
+            parsed = urllib.parse.urlparse(self.path)
+            params = urllib.parse.parse_qs(parsed.query)
+            try:
+                limit = int((params.get("limit") or ["30"])[0])
+            except ValueError:
+                limit = 30
+            try:
+                status, payload = read_recent_document_quality(limit)
+            except Exception as exc:
+                status, payload = 500, {"error": str(exc)}
+            self._send(status, json.dumps(payload).encode("utf-8"), "application/json")
             return
         if self.path == "/api/paperless/config":
             try:
@@ -7274,6 +8564,36 @@ class Handler(BaseHTTPRequestHandler):
                 self.rfile.read(length)
             try:
                 status, response = reset_ollama_runner()
+            except Exception as exc:
+                status, response = 500, {"error": str(exc)}
+            self._send(status, json.dumps(response).encode("utf-8"), "application/json")
+            return
+        if self.path == "/api/image-backend/reset":
+            length = int(self.headers.get("Content-Length", "0"))
+            if length:
+                self.rfile.read(length)
+            try:
+                status, response = reset_image_backend()
+            except Exception as exc:
+                status, response = 500, {"error": str(exc)}
+            self._send(status, json.dumps(response).encode("utf-8"), "application/json")
+            return
+        if self.path == "/api/openclaw/mcp/set":
+            length = int(self.headers.get("Content-Length", "0"))
+            raw = self.rfile.read(length)
+            try:
+                payload = json.loads(raw.decode("utf-8")) if raw else {}
+                status, response = set_openclaw_mcp_server(payload)
+            except Exception as exc:
+                status, response = 500, {"error": str(exc)}
+            self._send(status, json.dumps(response).encode("utf-8"), "application/json")
+            return
+        if self.path == "/api/openclaw/mcp/unset":
+            length = int(self.headers.get("Content-Length", "0"))
+            raw = self.rfile.read(length)
+            try:
+                payload = json.loads(raw.decode("utf-8")) if raw else {}
+                status, response = unset_openclaw_mcp_server(payload)
             except Exception as exc:
                 status, response = 500, {"error": str(exc)}
             self._send(status, json.dumps(response).encode("utf-8"), "application/json")

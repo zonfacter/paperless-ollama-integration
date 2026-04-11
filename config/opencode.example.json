@@ -1,0 +1,102 @@
+{
+  "$schema": "https://opencode.ai/config.json",
+  "model": "orfree/gpt-oss-20b-free",
+  "small_model": "orfree/gpt-oss-20b-free",
+  "provider": {
+    "orfree": {
+      "npm": "@ai-sdk/openai-compatible",
+      "name": "OpenRouter",
+      "options": {
+        "baseURL": "https://openrouter.ai/api/v1",
+        "apiKey": ""
+      },
+      "models": {
+        "gpt-oss-20b-free": {
+          "name": "GPT-OSS 20B (Free)",
+          "id": "openai/gpt-oss-20b:free"
+        },
+        "qwen3-coder-free": {
+          "name": "Qwen3 Coder (Free)",
+          "id": "qwen/qwen3-coder:free"
+        },
+        "gemma-4-26b-a4b-it-free": {
+          "name": "Gemma 4 26B A4B IT (Free)",
+          "id": "google/gemma-4-26b-a4b-it:free"
+        },
+        "gemma-3-4b-it-free": {
+          "name": "Gemma 3 4B IT (Free)",
+          "id": "google/gemma-3-4b-it:free"
+        }
+      }
+    },
+    "ollama_local": {
+      "npm": "@ai-sdk/openai-compatible",
+      "name": "Ollama Local",
+      "options": {
+        "baseURL": "http://ollama:11434/v1",
+        "apiKey": "dummy"
+      },
+      "models": {
+        "qwen2.5-coder:7b": {
+          "name": "Qwen2.5 Coder 7B",
+          "limit": {
+            "context": 32768,
+            "output": 8192
+          }
+        },
+        "qwen2.5:14b": {
+          "name": "Qwen2.5 14B",
+          "limit": {
+            "context": 32768,
+            "output": 8192
+          }
+        },
+        "qwen3.5:9b": {
+          "name": "Qwen3.5 9B",
+          "limit": {
+            "context": 32768,
+            "output": 8192
+          }
+        },
+        "qwen3.5:4b": {
+          "name": "Qwen3.5 4B",
+          "limit": {
+            "context": 16384,
+            "output": 4096
+          }
+        },
+        "deepseek-ocr:3b": {
+          "name": "DeepSeek OCR 3B",
+          "limit": {
+            "context": 8192,
+            "output": 2048
+          }
+        },
+        "gemma4:e2b-it-q4_K_M": {
+          "name": "Gemma 4 E2B Q4_K_M",
+          "limit": {
+            "context": 32768,
+            "output": 8192
+          }
+        }
+      }
+    },
+    "llamacpp_local": {
+      "npm": "@ai-sdk/openai-compatible",
+      "name": "llama.cpp Local",
+      "options": {
+        "baseURL": "http://llama-cpp:8080/v1",
+        "apiKey": "dummy"
+      },
+      "models": {
+        "gemma-4-E4B-it-Q4_K_M.gguf": {
+          "name": "Gemma 4 E4B Q4_K_M (llama.cpp)",
+          "limit": {
+            "context": 32768,
+            "output": 4096
+          }
+        }
+      }
+    }
+  }
+}

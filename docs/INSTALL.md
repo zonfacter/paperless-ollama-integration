@@ -111,6 +111,78 @@ Typical use case:
 - run `PaddleOCR` beside it as a comparison or future enhancement service
 - call it from scripts or a later review step
 
+## Optional: OpenCode Container (separater Workspace)
+
+Das Repo enthaelt einen optionalen `opencode`-Service mit eigenem Workspace-Unterordner.
+
+Voraussetzung in `.env`:
+
+```dotenv
+OPENCODE_WORKSPACE_HOST_PATH=/volume4/AI-TEST/workspace/opencode
+OPENCODE_CONFIG_HOST_PATH=./data/opencode
+OPENCODE_OPENAI_BASE_URL=http://llama-cpp:8080/v1
+OPENCODE_OLLAMA_HOST=http://ollama:11434
+OPENCODE_DEFAULT_MODEL=orfree/gpt-oss-20b-free
+OPENCODE_DEFAULT_AGENT=build
+OPENCODE_HOSTNAME=0.0.0.0
+OPENCODE_PORT=4096
+OPENCODE_SERVER_USERNAME=opencode
+OPENCODE_SERVER_PASSWORD=bitte-ein-starkes-passwort-setzen
+OPENROUTER_API_KEY=sk-or-v1-...
+```
+
+Start:
+
+```bash
+cd /volume1/docker/paperless-ai/paperless-ollama-integration
+mkdir -p /volume4/AI-TEST/workspace/opencode
+sudo docker compose --profile opencode up -d opencode
+```
+
+Interaktiv nutzen:
+
+```bash
+sudo docker exec -it paperless-opencode bash
+opencode
+```
+
+Der Container arbeitet dann nur im gemounteten Ordner `OPENCODE_WORKSPACE_HOST_PATH`.
+
+Empfohlener Start mit Repo-Defaults (Modell + Agent):
+
+```bash
+sudo docker exec -it paperless-opencode opencode-default
+```
+
+Schneller Funktionstest:
+
+```bash
+sudo docker exec paperless-opencode opencode-selftest
+```
+
+Web-Zugriff im Browser:
+
+```text
+http://<NAS-IP>:4096
+```
+
+Hinweis:
+- `opencode` laeuft im Compose-Setup als Server (`opencode serve`).
+- Fuer LAN-Zugriff sollte `OPENCODE_SERVER_PASSWORD` gesetzt sein.
+
+Custom Provider (empfohlen, nachhaltig):
+
+```bash
+cp config/opencode.example.json data/opencode/opencode.json
+sudo docker compose --profile opencode restart opencode
+```
+
+Damit nutzt `opencode` explizit lokale Provider (`ollama_local`, `llamacpp_local`) statt impliziter Defaults.
+Die Modell-Defaults kannst du dann in `data/opencode/opencode.json` zentral pflegen.
+Aktuell empfohlen fuer lokale Tool-Calls in `opencode`: `ollama_local/qwen3.5:9b`.
+Wenn Tool-Calls haengen: zuerst `small_model` ebenfalls auf `ollama_local/qwen3.5:9b` setzen und danach `opencode` neu starten.
+Fuer stabile Agent-Tool-Calls im Alltag: `orfree/gpt-oss-20b-free` als Build-Modell.
+
 ## Environment Types
 
 ### Native VM / Dedicated Server
@@ -158,6 +230,19 @@ curl -fsSL https://ollama.com/install.sh | sh
 ollama pull qwen3.5:9b
 ollama pull qwen3.5:4b
 ollama pull qwen2.5:7b-instruct
+ollama pull kwmcglon/gemma-4-E4B-it
+
+Hinweis: Die Gemma-4-Modelle funktionieren nur mit Ollama 0.20.2 oder neuer. Wenn Docker-Stacks weiterhin `ollama/ollama:latest` (0.18.x) nutzen, muss der Container auf `ollama/ollama:0.20.2` aktualisiert werden, bevor `kwmcglon/gemma-4-E4B-it` geladen werden kann.
+
+Fuer Docker-Stacks:
+
+```bash
+cd /volume1/docker/paperless-ai/paperless-ollama-integration
+sudo docker compose pull ollama
+sudo docker compose up -d --force-recreate ollama
+sudo docker exec paperless-ollama ollama --version
+sudo docker exec paperless-ollama ollama pull kwmcglon/gemma-4-E4B-it
+```
 ```
 
 ## Hook installieren

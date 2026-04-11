@@ -5,6 +5,20 @@ services:
       # Optional fuer abweichende Host-Gruppen:
       # OLLAMA_RENDER_GID: "105"
       # OLLAMA_VIDEO_GID: "44"
+    healthcheck:
+      test: ["CMD-SHELL", "ollama list >/dev/null 2>&1"]
+      interval: 30s
+      timeout: 10s
+      retries: 10
+
+  # Falls dein lokaler Stack den Dienst auf `ollama-rocm` umbenannt hat,
+  # denselben Healthcheck auch dort setzen.
+  # ollama-rocm:
+  #   healthcheck:
+  #     test: ["CMD-SHELL", "ollama list >/dev/null 2>&1"]
+  #     interval: 30s
+  #     timeout: 10s
+  #     retries: 10
 
   paperless-ai-web:
     environment:
@@ -14,4 +28,6 @@ services:
     environment:
       # Optional fuer abweichenden Workspace-Mount:
       # OPEN_WEBUI_WORKSPACE_HOST_PATH: "/volume1/docker/paperless-ai/paperless-ollama-integration"
+      # Sichtbarer UGREEN-Arbeitsbereich fuer Agent + Dateimanager:
+      # OPEN_WEBUI_WORKSPACE_HOST_PATH: "/volume4/AI-TEST/workspace"
       # OPEN_WEBUI_WORKSPACE_ROOT: "/workspace/project"

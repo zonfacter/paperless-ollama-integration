@@ -2,8 +2,8 @@
   "3": {
     "inputs": {
       "seed": 0,
-      "steps": 20,
-      "cfg": 7.0,
+      "steps": 12,
+      "cfg": 6.0,
       "sampler_name": "euler",
       "scheduler": "normal",
       "denoise": 1.0,
@@ -34,8 +34,8 @@
   },
   "5": {
     "inputs": {
-      "width": 768,
-      "height": 768,
+      "width": 512,
+      "height": 512,
       "batch_size": 1
     },
     "class_type": "EmptyLatentImage"

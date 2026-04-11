@@ -281,6 +281,7 @@ validate_repo_state() {
   check_path_exists "${REPO_DIR}/docker/open-webui/Dockerfile" "missing repo-managed Open WebUI wrapper"
   check_path_exists "${REPO_DIR}/scripts/openwebui/install_model_profiles.py" "missing Open WebUI profile installer"
   check_path_exists "${REPO_DIR}/scripts/openwebui/install_workspace_agent_tools.py" "missing Open WebUI workspace tool installer"
+  check_path_exists "${REPO_DIR}/scripts/openwebui/install_project_path_actions.py" "missing Open WebUI project-path action installer"
   check_path_exists "${REPO_DIR}/scripts/nas/apply-amd-power-cap.sh" "missing AMD power-cap helper"
   check_path_exists "${REPO_DIR}/scripts/nas/mi50-power-cap.service" "missing AMD power-cap service"
   check_path_exists "${REPO_DIR}/docker/tika-ocr-proxy/Dockerfile" "missing tika-ocr-proxy Dockerfile"
